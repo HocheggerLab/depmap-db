@@ -224,6 +224,14 @@ class DepMapSettings(BaseModel):
         default="https://depmap.org/portal/data_page/?tab=currentRelease",
         description="URL to check for current release information",
     )
+    release_label: str = Field(
+        default="currentRelease",
+        description="Configured DepMap release label used for refresh planning",
+    )
+    release_tracking_file: Path = Field(
+        default=Path("data/cache/release_state.json"),
+        description="File used to track the last planned/applied release",
+    )
     cache_dir: Path = Field(
         default=Path("data/cache"),
         description="Directory for caching downloaded files",
@@ -253,6 +261,13 @@ class DepMapSettings(BaseModel):
     def validate_cache_dir(cls, v: Path) -> Path:
         """Ensure the cache directory exists."""
         v.mkdir(parents=True, exist_ok=True)
+        return v
+
+    @field_validator("release_tracking_file")
+    @classmethod
+    def validate_release_tracking_file(cls, v: Path) -> Path:
+        """Ensure the release tracking directory exists."""
+        v.parent.mkdir(parents=True, exist_ok=True)
         return v
 
 

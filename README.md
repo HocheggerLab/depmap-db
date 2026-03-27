@@ -1,79 +1,115 @@
 # depmap-db
 
-Brief Description of project
+Local DuckDB tooling for downloading, storing, and exporting DepMap datasets.
 
-## Status
+## Current design
 
+The repository now treats the two large matrix datasets the same way:
 
-Version: ![version](https://img.shields.io/badge/version-0.1.0-blue)
+- **CRISPR gene effect** → canonical table: `gene_effects_wide`
+- **Gene expression** → canonical table: `gene_expression_wide`
 
-[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+This is a deliberate wide-matrix choice.
 
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+### Why wide is canonical here
 
-## Features
+- DepMap publishes both datasets as model-by-gene matrices already.
+- The export layer and downstream analysis in this repo are wide-oriented.
+- Supporting a partial long-path for expression but a wide-path for dependency made the code harder to reason about.
+- A single canonical storage model is simpler than maintaining half-integrated wide/long toggles.
 
-- [Feature 1]
-- [Feature 2]
-- [Feature 3]
+Long-format projections can still be added later as **derived views or exports** if a concrete use-case needs them, but the database now has one primary storage model for both matrix datasets.
 
-## Installation
+## Install
 
 ```bash
-# Clone the repository
-git clone repo_adress
-# Change into the project directory
+git clone <repo>
 cd depmap-db
-# Create and activate virtual environment
 uv venv
 source .venv/bin/activate
-# Install the package
-uv pip install -e .
+uv sync
 ```
 
-## Project Structure
-depmap-db/
-├── src/
-│ └── depmap-db/
-├── tests/
-├── docs/
-└── examples/
+## CLI
 
-## Versioning
-
-This project uses [Semantic Versioning](https://semver.org/) and [Conventional Commits](https://www.conventionalcommits.org/).
-
-To bump the version use commitizen:
-https://commitizen-tools.github.io/commitizen/
+### Initialize the database
 
 ```bash
-cz bump
+depmap-db init
 ```
-## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`cz commit`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### Download phase-1 datasets
 
-## Authors
+```bash
+depmap-db download
+```
 
+### Download and load datasets
 
-Created by Helfrid Hochegger
-Email: hh65@sussex.ac.uk
+```bash
+depmap-db download --datasets Model --datasets Gene --load-data
+```
 
+### Load a local folder of CSVs
 
-## Dependencies
+```bash
+depmap-db load-folder --folder /path/to/depmap/csvs
+```
 
-Requires Python 3.13 or greater
+### Plan or apply a refresh
 
-## License
+`refresh` now has a first clean abstraction point for repeatable updates:
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+- a configured **release label** (`DEPMAP_DEPMAP__RELEASE_LABEL`)
+- a persisted **release tracking file**
+- a refresh planner that decides which datasets are already cached for the tracked release
 
-## Acknowledgments
+Plan only:
 
-- Hat tip to anyone whose code was used
-- Inspiration
-- References
+```bash
+depmap-db refresh --datasets Model --datasets Gene
+```
+
+Apply the refresh plan:
+
+```bash
+depmap-db refresh --datasets Model --datasets Gene --apply --load-data
+```
+
+## Practical update strategy
+
+A pragmatic recurring update loop should work like this:
+
+1. **Detect or configure the target release**
+   - simplest robust path: configure a release label manually per DepMap release
+   - future improvement: fetch the DepMap release page and parse a release identifier into that same abstraction
+2. **Map datasets to filenames**
+   - keep this in a single dataset registry (`DEPMAP_FILES`)
+3. **Build a refresh plan**
+   - compare the target release label + filename mapping against the last applied snapshot
+   - reuse valid cached files when nothing changed
+4. **Download missing assets**
+   - register cached files with metadata and checksums
+5. **Load in a repeatable order**
+   - metadata first (`Model`, `Gene`, `ModelCondition`), then matrix datasets
+6. **Record applied state**
+   - write the applied release snapshot so the next run can be incremental
+
+### What should stay configurable
+
+- release label
+- cache directory
+- release tracking file
+- requested datasets
+- whether refresh also loads data into DuckDB
+- whether an apply should force-reload tables
+
+## Validation
+
+Run the standard checks:
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run mypy src
+```

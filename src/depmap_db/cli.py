@@ -15,11 +15,9 @@ from .config import get_logger, get_settings, reload_settings
 from .database import create_tables, get_current_schema_version, get_db_manager
 from .database.connection import reset_db_manager
 from .database.queries import get_available_views
-from .downloader import FileManager
+from .downloader import FileManager, RefreshPlanner, ReleaseTracker
 from .etl.processors import (
-    GeneEffectProcessor,
     GeneEffectWideProcessor,
-    GeneExpressionProcessor,
     GeneExpressionWideProcessor,
     GeneProcessor,
     ModelProcessor,
@@ -34,17 +32,14 @@ logger = get_logger(__name__)
 console = Console()
 
 
-def _get_processor(
-    dataset_name: str, wide_format: bool = True
-) -> BaseProcessor | None:
-    """Get the appropriate processor for a dataset."""
+def _get_processor(dataset_name: str) -> BaseProcessor | None:
+    """Get the appropriate processor for a dataset.
+
+    All data is stored in wide format (canonical storage).
+    """
     processors: dict[str, type] = {
-        "CRISPRGeneEffect": GeneEffectWideProcessor
-        if wide_format
-        else GeneEffectProcessor,
-        "GeneExpression": GeneExpressionWideProcessor
-        if wide_format
-        else GeneExpressionProcessor,
+        "CRISPRGeneEffect": GeneEffectWideProcessor,
+        "GeneExpression": GeneExpressionWideProcessor,
         "Gene": GeneProcessor,
         "Model": ModelProcessor,
     }
@@ -96,6 +91,57 @@ def handle_exceptions(func: Callable[..., Any]) -> Callable[..., Any]:
             sys.exit(1)
 
     return wrapper
+
+
+def _resolve_requested_datasets(datasets: tuple[str, ...]) -> list[str]:
+    """Resolve and validate requested dataset names."""
+    if not datasets:
+        return PHASE_1_DATASETS
+
+    invalid = set(datasets) - set(SUPPORTED_DATASETS)
+    if invalid:
+        invalid_list = ", ".join(sorted(invalid))
+        supported_list = ", ".join(SUPPORTED_DATASETS)
+        raise ValueError(
+            f"Invalid datasets: {invalid_list}. Available datasets: {supported_list}"
+        )
+
+    return list(datasets)
+
+
+def _load_downloaded_files(
+    downloaded_files: dict[str, Path], force: bool = False
+) -> None:
+    """Load downloaded dataset files into the database."""
+    if not get_current_schema_version():
+        console.print(
+            "[red]Database not initialized. Run 'depmap-db init' first.[/red]"
+        )
+        return
+
+    for dataset_name, file_path in downloaded_files.items():
+        processor = _get_processor(dataset_name)
+        if not processor:
+            console.print(
+                f"[yellow]Skipping {dataset_name} - processor not yet implemented[/yellow]"
+            )
+            continue
+
+        console.print(f"[blue]Processing {dataset_name}...[/blue]")
+        result = processor.process_file(file_path, force_reload=force)
+
+        if result.status == "success":
+            console.print(
+                f"[green]✓ {dataset_name}: {result.records_inserted:,} records loaded[/green]"
+            )
+        elif result.status == "skipped":
+            console.print(
+                f"[yellow]- {dataset_name}: {result.records_skipped:,} records already exist[/yellow]"
+            )
+        else:
+            console.print(
+                f"[red]✗ {dataset_name}: {result.error_message}[/red]"
+            )
 
 
 @click.group()
@@ -373,36 +419,17 @@ def query(view: str | None, limit: int, output_format: str) -> None:
 @click.option(
     "--load-data", is_flag=True, help="Also load downloaded data into database"
 )
-@click.option(
-    "--wide-format/--long-format",
-    default=True,
-    help="Store gene effects in wide format (default) or long format",
-)
 @handle_exceptions
 def download(
     datasets: tuple[str, ...],
     cache_dir: Path | None,
     force: bool,
     load_data: bool,
-    wide_format: bool,
 ) -> None:
     """Download DepMap data files."""
     from .downloader.depmap_client import download_datasets_sync
 
-    # Determine which datasets to download
-    if datasets:
-        # Validate requested datasets
-        invalid = set(datasets) - set(SUPPORTED_DATASETS)
-        if invalid:
-            console.print(f"[red]Invalid datasets: {', '.join(invalid)}[/red]")
-            console.print(
-                f"[yellow]Available datasets: {', '.join(SUPPORTED_DATASETS)}[/yellow]"
-            )
-            return
-        requested_datasets = list(datasets)
-    else:
-        # Use Phase 1 defaults
-        requested_datasets = PHASE_1_DATASETS
+    requested_datasets = _resolve_requested_datasets(datasets)
 
     console.print(
         f"[blue]Downloading datasets: {', '.join(requested_datasets)}[/blue]"
@@ -452,44 +479,9 @@ def download(
             f"[green]✓ Successfully downloaded {len(downloaded_files)} files[/green]"
         )
 
-        # Load data if requested
         if load_data:
             console.print("[blue]Loading data into database...[/blue]")
-
-            # Check database is initialized
-            if not get_current_schema_version():
-                console.print(
-                    "[red]Database not initialized. Run 'depmap-db init' first.[/red]"
-                )
-                return
-
-            # Process each downloaded file
-            for dataset_name, file_path in downloaded_files.items():
-                processor = _get_processor(dataset_name, wide_format)
-                if processor:
-                    console.print(f"[blue]Processing {dataset_name}...[/blue]")
-
-                    result = processor.process_file(
-                        file_path, force_reload=force
-                    )
-
-                    if result.status == "success":
-                        console.print(
-                            f"[green]✓ {dataset_name}: {result.records_inserted:,} records loaded[/green]"
-                        )
-                    elif result.status == "skipped":
-                        console.print(
-                            f"[yellow]- {dataset_name}: {result.records_skipped:,} records already exist[/yellow]"
-                        )
-                    else:
-                        console.print(
-                            f"[red]✗ {dataset_name}: {result.error_message}[/red]"
-                        )
-                else:
-                    console.print(
-                        f"[yellow]Skipping {dataset_name} - processor not yet implemented[/yellow]"
-                    )
-
+            _load_downloaded_files(downloaded_files, force=force)
             console.print("[green]✓ Data loading completed[/green]")
 
     except (OSError, RuntimeError) as e:
@@ -511,15 +503,8 @@ def download(
 @click.option(
     "--pattern", default="*.csv", help="File pattern to match (default: *.csv)"
 )
-@click.option(
-    "--wide-format/--long-format",
-    default=True,
-    help="Store gene effects in wide format (default) or long format",
-)
 @handle_exceptions
-def load_folder(
-    folder: Path, force: bool, pattern: str, wide_format: bool
-) -> None:
+def load_folder(folder: Path, force: bool, pattern: str) -> None:
     """Load all DepMap files from a folder into the database."""
     console.print(f"[blue]Loading DepMap files from: {folder}[/blue]")
 
@@ -555,7 +540,7 @@ def load_folder(
             continue
 
         # Get processor
-        processor = _get_processor(dataset_name, wide_format)
+        processor = _get_processor(dataset_name)
 
         if not processor:
             console.print(
@@ -638,15 +623,87 @@ def load_folder(
 
 
 @cli.command()
+@click.option(
+    "--datasets",
+    multiple=True,
+    help="Specific datasets to refresh (default: Phase 1 datasets)",
+)
+@click.option(
+    "--cache-dir",
+    type=click.Path(path_type=Path),
+    help="Directory for cached downloads and release tracking",
+)
+@click.option(
+    "--apply/--plan-only",
+    default=False,
+    help="Apply the refresh plan instead of only showing it",
+)
+@click.option(
+    "--force", is_flag=True, help="Force reload into the database when applying"
+)
+@click.option(
+    "--load-data",
+    is_flag=True,
+    help="Also load refreshed datasets into the database when applying",
+)
 @handle_exceptions
-def refresh() -> None:
-    """Refresh database with latest DepMap release."""
+def refresh(
+    datasets: tuple[str, ...],
+    cache_dir: Path | None,
+    apply: bool,
+    force: bool,
+    load_data: bool,
+) -> None:
+    """Plan or apply a refresh for the configured DepMap release."""
+    requested_datasets = _resolve_requested_datasets(datasets)
+    file_manager = FileManager(cache_dir)
+    tracker = None
+    if cache_dir:
+        tracker = ReleaseTracker(cache_dir / "release_state.json")
+    planner = RefreshPlanner(file_manager=file_manager, tracker=tracker)
+    plan = planner.build_plan(requested_datasets)
+
     console.print(
-        "[yellow]Refresh functionality not yet implemented.[/yellow]"
+        f"[blue]Refresh plan for release '{plan.snapshot.release_label}'[/blue]"
+    )
+    console.print(f"[cyan]Reason:[/cyan] {plan.reason}")
+    console.print(
+        f"[cyan]Cached:[/cyan] {', '.join(plan.cached_datasets) if plan.cached_datasets else 'none'}"
     )
     console.print(
-        "This will download the latest data and update the database."
+        f"[cyan]To download:[/cyan] {', '.join(plan.datasets_to_download) if plan.datasets_to_download else 'none'}"
     )
+
+    if not apply:
+        console.print(
+            "[yellow]Plan only. Re-run with --apply to download and record this release.[/yellow]"
+        )
+        return
+
+    downloaded_files: dict[str, Path] = {}
+    if plan.datasets_to_download:
+        from .downloader.depmap_client import download_datasets_sync
+
+        console.print("[blue]Downloading refresh datasets...[/blue]")
+        downloaded_files = download_datasets_sync(
+            plan.datasets_to_download, cache_dir
+        )
+
+        for dataset_name, file_path in downloaded_files.items():
+            source_url = (
+                f"https://depmap.org/portal/api/download/file/{file_path.name}"
+            )
+            file_manager.register_download(dataset_name, file_path, source_url)
+    else:
+        console.print("[green]No downloads needed for this release.[/green]")
+
+    planner.mark_applied(plan.snapshot)
+    console.print("[green]✓ Recorded applied release state[/green]")
+
+    if load_data and downloaded_files:
+        console.print("[blue]Loading refreshed data into database...[/blue]")
+        _load_downloaded_files(downloaded_files, force=force)
+        console.print("[green]✓ Refresh data loading completed[/green]")
 
 
 @cli.command()

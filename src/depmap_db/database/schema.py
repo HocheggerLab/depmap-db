@@ -32,7 +32,7 @@ class TableSchema:
 class Schema:
     """Database schema management."""
 
-    CURRENT_VERSION = "1.0.0"
+    CURRENT_VERSION = "1.1.0"
 
     def __init__(self) -> None:
         self.db_manager = get_db_manager()
@@ -42,7 +42,6 @@ class Schema:
     def _define_schema(self) -> None:
         """Define the complete database schema."""
 
-        # System tables
         self._add_table(
             TableSchema(
                 name="schema_version",
@@ -59,7 +58,6 @@ class Schema:
             )
         )
 
-        # Gene metadata table
         self._add_table(
             TableSchema(
                 name="genes",
@@ -86,7 +84,6 @@ class Schema:
             )
         )
 
-        # Model metadata table
         self._add_table(
             TableSchema(
                 name="models",
@@ -125,7 +122,6 @@ class Schema:
             )
         )
 
-        # Model conditions table
         self._add_table(
             TableSchema(
                 name="model_conditions",
@@ -150,57 +146,29 @@ class Schema:
             )
         )
 
-        # CRISPR gene effects table (wide format - genes as columns)
-        # Note: This table will be created dynamically based on the actual gene columns
         self._add_table(
             TableSchema(
                 name="gene_effects_wide",
                 table_type=TableType.CORE_DATA,
                 dependencies=["models"],
-                description="CRISPR gene effect scores in wide format (models x genes matrix)",
+                description="Canonical CRISPR gene effect matrix (models x genes)",
                 sql="""
             CREATE TABLE IF NOT EXISTS gene_effects_wide (
                 model_id VARCHAR PRIMARY KEY,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_id) REFERENCES models(model_id)
-                -- Gene columns will be added dynamically during data loading
+                -- Gene columns are added dynamically during data loading
             )
             """,
             )
         )
 
-        # Gene expression long format table
-        self._add_table(
-            TableSchema(
-                name="gene_expression",
-                table_type=TableType.CORE_DATA,
-                dependencies=["models", "model_conditions"],
-                description="Gene expression TPM values in long format",
-                sql="""
-            CREATE TABLE IF NOT EXISTS gene_expression (
-                model_id VARCHAR NOT NULL,
-                gene_id VARCHAR NOT NULL,
-                expression_value DOUBLE NOT NULL,
-                sequencing_id VARCHAR,
-                model_condition_id VARCHAR,
-                is_default_entry BOOLEAN DEFAULT TRUE,
-                is_default_for_mc BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (model_id, gene_id),
-                FOREIGN KEY (model_id) REFERENCES models(model_id),
-                FOREIGN KEY (model_condition_id) REFERENCES model_conditions(model_condition_id)
-            )
-            """,
-            )
-        )
-
-        # Gene expression wide format table
         self._add_table(
             TableSchema(
                 name="gene_expression_wide",
                 table_type=TableType.CORE_DATA,
                 dependencies=["models", "model_conditions"],
-                description="Gene expression TPM values in wide format (models x genes matrix)",
+                description="Canonical gene expression matrix (models x genes)",
                 sql="""
             CREATE TABLE IF NOT EXISTS gene_expression_wide (
                 model_id VARCHAR PRIMARY KEY,
@@ -211,13 +179,12 @@ class Schema:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_id) REFERENCES models(model_id),
                 FOREIGN KEY (model_condition_id) REFERENCES model_conditions(model_condition_id)
-                -- Gene columns will be added dynamically during data loading
+                -- Gene columns are added dynamically during data loading
             )
             """,
             )
         )
 
-        # Screen metadata table
         self._add_table(
             TableSchema(
                 name="screens",
@@ -245,7 +212,6 @@ class Schema:
             )
         )
 
-        # Data lineage tracking
         self._add_table(
             TableSchema(
                 name="data_imports",
@@ -287,7 +253,6 @@ class Schema:
         remaining = list(self._tables.keys())
 
         while remaining:
-            # Find tables with all dependencies satisfied
             ready = []
             for table_name in remaining:
                 table_schema = self._tables[table_name]
@@ -299,7 +264,6 @@ class Schema:
                     f"Circular dependencies detected in tables: {remaining}"
                 )
 
-            # Add ready tables to ordered list and remove from remaining
             ordered.extend(ready)
             for table_name in ready:
                 remaining.remove(table_name)
@@ -323,18 +287,12 @@ class Schema:
 
 
 def create_tables(tables: list[str] | None = None) -> None:
-    """Create database tables in dependency order.
-
-    Args:
-        tables: Optional list of specific tables to create. If None, creates all tables.
-    """
+    """Create database tables in dependency order."""
     schema = Schema()
 
     if tables is None:
-        # Create all tables in dependency order
         table_names = schema.get_creation_order()
     else:
-        # Validate requested tables exist
         for table_name in tables:
             if table_name not in schema._tables:
                 raise ValueError(f"Unknown table: {table_name}")
@@ -345,7 +303,6 @@ def create_tables(tables: list[str] | None = None) -> None:
     for table_name in table_names:
         schema.create_table(table_name)
 
-    # Update schema version
     _update_schema_version(schema.CURRENT_VERSION)
 
     logger.info("Database schema creation completed successfully")
@@ -390,7 +347,6 @@ def drop_all_tables() -> None:
     db_manager = get_db_manager()
     schema = Schema()
 
-    # Drop in reverse dependency order
     table_names = list(reversed(schema.get_creation_order()))
 
     for table_name in table_names:
