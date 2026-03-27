@@ -427,7 +427,10 @@ def download(
     load_data: bool,
 ) -> None:
     """Download DepMap data files."""
-    from .downloader.depmap_client import download_datasets_sync
+    from .downloader.depmap_client import (
+        download_datasets_sync,
+        get_download_sources_sync,
+    )
 
     requested_datasets = _resolve_requested_datasets(datasets)
 
@@ -451,13 +454,11 @@ def download(
         downloaded_files = download_datasets_sync(
             requested_datasets, cache_dir
         )
+        download_sources = get_download_sources_sync(requested_datasets)
 
         # Register downloads with file manager
         for dataset_name, file_path in downloaded_files.items():
-            # Construct source URL (this is a simplified version)
-            source_url = (
-                f"https://depmap.org/portal/api/download/file/{file_path.name}"
-            )
+            source_url = download_sources[dataset_name].url
             file_manager.register_download(dataset_name, file_path, source_url)
 
         # Show results
@@ -682,17 +683,21 @@ def refresh(
 
     downloaded_files: dict[str, Path] = {}
     if plan.datasets_to_download:
-        from .downloader.depmap_client import download_datasets_sync
+        from .downloader.depmap_client import (
+            download_datasets_sync,
+            get_download_sources_sync,
+        )
 
         console.print("[blue]Downloading refresh datasets...[/blue]")
         downloaded_files = download_datasets_sync(
             plan.datasets_to_download, cache_dir
         )
+        download_sources = get_download_sources_sync(
+            plan.datasets_to_download
+        )
 
         for dataset_name, file_path in downloaded_files.items():
-            source_url = (
-                f"https://depmap.org/portal/api/download/file/{file_path.name}"
-            )
+            source_url = download_sources[dataset_name].url
             file_manager.register_download(dataset_name, file_path, source_url)
     else:
         console.print("[green]No downloads needed for this release.[/green]")

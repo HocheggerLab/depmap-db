@@ -77,7 +77,7 @@ DEPMAP_FILES: dict[str, DatasetInfo] = {
         filename="OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv",
         description="Gene expression data (TPM, log-transformed)",
         table_name="gene_expression_wide",
-        priority=2,
+        priority=1,
     ),
     "OmicsSomaticMutations": DatasetInfo(
         filename="OmicsSomaticMutations.csv",
@@ -106,7 +106,7 @@ PHASE_3_DATASETS = [
 SUPPORTED_DATASETS: list[str] = list(DEPMAP_FILES.keys())
 DEFAULT_DATASETS = PHASE_1_DATASETS
 
-DEPMAP_BASE_URL = "https://depmap.org/portal/api/download/file/"
+DEPMAP_BASE_URL = "https://depmap.org/portal/api/download/files"
 DEPMAP_RELEASE_INFO_URL = (
     "https://depmap.org/portal/data_page/?tab=currentRelease"
 )

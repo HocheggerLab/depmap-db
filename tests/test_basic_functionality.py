@@ -1,5 +1,6 @@
 """Basic functionality tests for DepMap database infrastructure."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from depmap_db.database import (
     reset_db_manager,
 )
 from depmap_db.downloader import RefreshPlanner
+from depmap_db.downloader.depmap_client import DepMapClient, ManifestFile
 from depmap_db.downloader.file_manager import FileManager
 from depmap_db.downloader.releases import ReleaseTracker
 from depmap_db.utils.constants import DEPMAP_FILES
@@ -26,7 +28,8 @@ def test_settings_configuration() -> None:
     assert settings.log_level == "INFO"
     assert settings.database.max_memory.endswith("GB")
     assert settings.depmap.max_retries == 3
-    assert settings.depmap.release_label == "currentRelease"
+    assert settings.depmap.release_label == "DepMap Public 25Q3"
+    assert settings.depmap.base_url.endswith("/portal/api/download/files")
 
 
 def test_dataset_tables_use_wide_matrix_storage() -> None:
@@ -110,13 +113,50 @@ def test_refresh_planner_uses_release_tracking(tmp_path: Path) -> None:
     file_manager.register_download(
         "Model",
         model_csv,
-        "https://depmap.org/portal/api/download/file/Model.csv",
+        "https://signed.example/Model.csv?signature=test",
         force_checksum=False,
     )
 
     second_plan = planner.build_plan(["Model", "Gene"])
     assert second_plan.cached_datasets == ["Model"]
     assert second_plan.datasets_to_download == ["Gene"]
+
+
+def test_manifest_resolution_prefers_configured_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Manifest lookups should use the configured release-specific signed URL."""
+    settings = reload_settings()
+    settings.depmap.cache_dir = tmp_path
+    settings.depmap.release_label = "DepMap Public 25Q3"
+
+    client = DepMapClient()
+    manifest = [
+        ManifestFile(
+            release="DepMap Public 24Q4",
+            release_date="2024-12-01",
+            filename="Model.csv",
+            url="https://signed.example/model-24q4.csv",
+            md5_hash="old-md5",
+        ),
+        ManifestFile(
+            release="DepMap Public 25Q3",
+            release_date="2025-09-25",
+            filename="Model.csv",
+            url="https://signed.example/model-25q3.csv",
+            md5_hash="new-md5",
+        ),
+    ]
+
+    async def fake_fetch_manifest() -> list[ManifestFile]:
+        return manifest
+
+    monkeypatch.setattr(client, "_fetch_manifest", fake_fetch_manifest)
+
+    resolved = asyncio.run(client.resolve_manifest_file("Model.csv"))
+    assert resolved.release == "DepMap Public 25Q3"
+    assert resolved.url == "https://signed.example/model-25q3.csv"
+    assert resolved.md5_hash == "new-md5"
 
 
 if __name__ == "__main__":

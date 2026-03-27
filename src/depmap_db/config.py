@@ -217,15 +217,19 @@ class DepMapSettings(BaseModel):
     """DepMap data download configuration."""
 
     base_url: str = Field(
-        default="https://depmap.org/portal/api/download/file/",
-        description="Base URL for DepMap API downloads",
+        default="https://depmap.org/portal/api/download/files",
+        description="Manifest CSV endpoint for DepMap downloads",
+    )
+    datasets_url: str = Field(
+        default="https://depmap.org/portal/api/download/datasets",
+        description="Dataset catalogue JSON endpoint for DepMap downloads",
     )
     release_url: str = Field(
         default="https://depmap.org/portal/data_page/?tab=currentRelease",
         description="URL to check for current release information",
     )
     release_label: str = Field(
-        default="currentRelease",
+        default="DepMap Public 25Q3",
         description="Configured DepMap release label used for refresh planning",
     )
     release_tracking_file: Path = Field(

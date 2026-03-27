@@ -1,6 +1,6 @@
 """DepMap data download functionality."""
 
-from .depmap_client import DepMapClient
+from .depmap_client import DepMapClient, ManifestFile
 from .exceptions import DownloadError, ValidationError
 from .file_manager import DownloadResult, FileManager
 from .releases import (
@@ -12,6 +12,7 @@ from .releases import (
 
 __all__ = [
     "DepMapClient",
+    "ManifestFile",
     "FileManager",
     "DownloadResult",
     "DownloadError",
