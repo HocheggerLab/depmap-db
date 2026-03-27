@@ -23,6 +23,7 @@ from .etl.processors import (
     ModelProcessor,
 )
 from .etl.processors.base import BaseProcessor
+from .query import GeneQueryService, QueryFormat, SummaryGrouping
 from .utils.constants import (
     PHASE_1_DATASETS,
     SUPPORTED_DATASETS,
@@ -142,6 +143,39 @@ def _load_downloaded_files(
             console.print(
                 f"[red]✗ {dataset_name}: {result.error_message}[/red]"
             )
+
+
+def _require_initialized_database() -> bool:
+    """Return True when the database schema exists, otherwise print help."""
+    if get_current_schema_version():
+        return True
+
+    console.print(
+        "[red]Database not initialized. Run 'depmap-db init' first.[/red]"
+    )
+    return False
+
+
+def _render_dataframe(df: Any, output_format: QueryFormat, title: str) -> None:
+    """Render a DataFrame for CLI output."""
+    if df.empty:
+        console.print("[yellow]No results found[/yellow]")
+        return
+
+    if output_format == "table":
+        result_table = Table(title=title)
+        for column in df.columns:
+            result_table.add_column(str(column), style="cyan")
+        for _, row in df.iterrows():
+            result_table.add_row(*[str(value) for value in row])
+        console.print(result_table)
+        return
+
+    if output_format == "csv":
+        console.print(df.to_csv(index=False))
+        return
+
+    console.print(df.to_json(orient="records", indent=2))
 
 
 @click.group()
@@ -1008,6 +1042,141 @@ def export(
         console.print(f"[red]Export failed: {e}[/red]")
         logger.error("Export failed: %s", e)
         raise
+
+
+@cli.group()
+def gene() -> None:
+    """Gene-centric query helpers on the local wide matrices."""
+
+
+@gene.command("dependency-summary")
+@click.argument("gene_symbol")
+@click.option(
+    "--group-by",
+    type=click.Choice(["lineage", "disease"]),
+    default="lineage",
+    show_default=True,
+    help="Group dependency values by lineage or primary disease.",
+)
+@click.option("--limit", type=int, default=15, show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def gene_dependency_summary(
+    gene_symbol: str, group_by: SummaryGrouping, limit: int, output_format: QueryFormat
+) -> None:
+    """Summarize dependency for a gene across cancer groups."""
+    if not _require_initialized_database():
+        return
+
+    service = GeneQueryService()
+    df = service.get_dependency_summary(
+        gene_symbol, group_by=group_by, limit=limit
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Dependency summary for {gene_symbol} by {group_by}",
+    )
+
+
+@gene.command("dependency-models")
+@click.argument("gene_symbol")
+@click.option("--lineage", help="Exact OncoTree lineage filter.")
+@click.option("--disease", help="Exact OncoTree primary disease filter.")
+@click.option("--limit", type=int, help="Optional row limit.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@click.option(
+    "--output",
+    "output_path",
+    type=click.Path(path_type=Path),
+    help="Write matching rows to CSV at this path.",
+)
+@handle_exceptions
+def gene_dependency_models(
+    gene_symbol: str,
+    lineage: str | None,
+    disease: str | None,
+    limit: int | None,
+    output_format: QueryFormat,
+    output_path: Path | None,
+) -> None:
+    """Return or export per-model dependency values for a gene."""
+    if not _require_initialized_database():
+        return
+
+    service = GeneQueryService()
+    if output_path is not None:
+        row_count = service.export_dependency_models_csv(
+            gene_symbol,
+            output_path,
+            lineage=lineage,
+            disease=disease,
+            limit=limit,
+        )
+        console.print(
+            f"[green]✓ Exported {row_count:,} dependency rows to {output_path}[/green]"
+        )
+        return
+
+    df = service.get_dependency_models(
+        gene_symbol,
+        lineage=lineage,
+        disease=disease,
+        limit=limit,
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Dependency models for {gene_symbol}",
+    )
+
+
+@gene.command("expression-summary")
+@click.argument("gene_symbol")
+@click.option(
+    "--group-by",
+    type=click.Choice(["lineage", "disease"]),
+    default="lineage",
+    show_default=True,
+    help="Group expression values by lineage or primary disease.",
+)
+@click.option("--limit", type=int, default=15, show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def gene_expression_summary(
+    gene_symbol: str, group_by: SummaryGrouping, limit: int, output_format: QueryFormat
+) -> None:
+    """Summarize expression for a gene across cancer groups."""
+    if not _require_initialized_database():
+        return
+
+    service = GeneQueryService()
+    df = service.get_expression_summary(
+        gene_symbol, group_by=group_by, limit=limit
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Expression summary for {gene_symbol} by {group_by}",
+    )
 
 
 if __name__ == "__main__":

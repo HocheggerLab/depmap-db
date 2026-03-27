@@ -56,6 +56,26 @@ depmap-db download --datasets Model --datasets Gene --load-data
 depmap-db load-folder --folder /path/to/depmap/csvs
 ```
 
+### Gene-level query helpers
+
+The first query-oriented CLI layer is intentionally small and composable:
+
+```bash
+# Which lineages are most dependent on HAPSTR1?
+depmap-db gene dependency-summary HAPSTR1 --group-by lineage --limit 10
+
+# Same idea, grouped by primary disease instead
+depmap-db gene dependency-summary HAPSTR1 --group-by disease --limit 10
+
+# Export per-model dependency values for MASTL in breast models
+depmap-db gene dependency-models MASTL --lineage Breast --output mastl_breast.csv
+
+# Summarise expression by lineage for a gene
+depmap-db gene expression-summary HAPSTR1 --group-by lineage --limit 10
+```
+
+`dependency-models` can also print to stdout in table, CSV, or JSON format via `--format`.
+
 ### Plan or apply a refresh
 
 `refresh` now has a first clean abstraction point for repeatable updates:
