@@ -4,14 +4,13 @@ Local DuckDB tooling for downloading, storing, and exporting DepMap datasets.
 
 ## Current design
 
-The repository now treats the two large matrix datasets the same way:
+The repository treats datasets according to their natural structure:
 
-- **CRISPR gene effect** → canonical table: `gene_effects_wide`
-- **Gene expression** → canonical table: `gene_expression_wide`
+- **CRISPR gene effect** → canonical table: `gene_effects_wide` (wide matrix)
+- **Gene expression** → canonical table: `gene_expression_wide` (wide matrix)
+- **Somatic mutations** → canonical table: `mutations` (long event table) + derived `model_gene_mutation_status` (sparse)
 
-This is a deliberate wide-matrix choice.
-
-### Why wide is canonical here
+### Why wide is canonical for dependency/expression
 
 - DepMap publishes both datasets as model-by-gene matrices already.
 - The export layer and downstream analysis in this repo are wide-oriented.
@@ -19,6 +18,12 @@ This is a deliberate wide-matrix choice.
 - A single canonical storage model is simpler than maintaining half-integrated wide/long toggles.
 
 Long-format projections can still be added later as **derived views or exports** if a concrete use-case needs them, but the database now has one primary storage model for both matrix datasets.
+
+### Why long is canonical for mutations
+
+- Mutations are naturally event-based (MAF-like) with variable numbers of events per model-gene pair.
+- The `mutations` table preserves all source annotation columns for filtering and interpretation.
+- The derived `model_gene_mutation_status` table provides a sparse model-gene mutation indicator for joining to wide dependency/expression tables.
 
 ## Install
 
@@ -123,6 +128,113 @@ A pragmatic recurring update loop should work like this:
 - requested datasets
 - whether refresh also loads data into DuckDB
 - whether an apply should force-reload tables
+
+## Mutation query surfaces
+
+The first mutation-aware query layer is now available:
+
+```bash
+# Inspect event-level mutations for a model / cell line
+# accepts model_id, cell line name, stripped name, or unique partial match
+# filters can be combined
+# driver currently means the Hess driver flag
+# output supports table/csv/json
+
+depmap-db model mutations DLD-1 --gene KRAS --hotspot-only --format json
+
+# Rank the most frequently mutated genes in a lineage
+# includes total models, mutation frequency, and hotspot/LoF/driver model counts
+
+depmap-db lineage mutation-frequency Lung --limit 10
+
+# Compare dependency between mutant and WT cohorts
+# useful for first-pass stratified hypothesis checks
+
+depmap-db gene dependency-by-mutation KRAS --mutation-gene TP53 --mutation-class driver --lineage Lung
+```
+
+Notes:
+
+- `model mutations` returns event-level rows from the canonical `mutations` table.
+- `lineage mutation-frequency` is based on the derived `model_gene_mutation_status` table.
+- `gene dependency-by-mutation` joins `model_gene_mutation_status` to `gene_effects_wide` and reports mutant/WT counts plus mean/median dependency and `delta_mean`.
+
+## Polars Python API
+
+Polars support is exposed as a **Python API for exploratory analysis**, not as a CLI surface.
+
+### Why it works this way
+
+A shell command cannot return a live `polars.LazyFrame`, and the cleanest lazy workflow today is still:
+
+- DuckDB as the local source of truth
+- export selected DuckDB tables to Parquet snapshots
+- reopen those snapshots with `pl.scan_parquet(...)`
+
+That is what `depmap_db.polars` does for you.
+
+### Supported tables
+
+- `models`
+- `genes`
+- `gene_effects_wide`
+- `gene_expression_wide`
+- `mutations`
+- `model_gene_mutation_status`
+
+### Recommended usage pattern
+
+In a notebook or REPL, call `prepare_lazy_tables(...)` for the tables you want to explore. This will refresh Parquet snapshots when needed and return Polars `LazyFrame`s ready for composition.
+
+```python
+import polars as pl
+from depmap_db.polars import prepare_lazy_tables
+
+tables = prepare_lazy_tables(
+    tables=["models", "mutations", "model_gene_mutation_status"],
+)
+
+models = tables["models"]
+mutations = tables["mutations"]
+mutation_status = tables["model_gene_mutation_status"]
+
+tp53_events = (
+    mutations
+    .filter(pl.col("hugo_symbol") == "TP53")
+    .join(
+        models.select(["model_id", "cell_line_name", "oncotree_lineage"]),
+        on="model_id",
+        how="left",
+    )
+)
+
+print(tp53_events.limit(10).collect())
+```
+
+### Reuse existing snapshots
+
+If the Parquet snapshots already exist and you just want to reopen them, use `get_lazy_tables(...)`:
+
+```python
+from depmap_db.polars import get_lazy_tables
+
+tables = get_lazy_tables(tables=["models", "mutations"])
+```
+
+### Single-table helpers
+
+For quick exploratory work, the module also exposes convenience helpers for individual tables:
+
+```python
+from depmap_db.polars import lazy_models, lazy_mutations
+
+models = lazy_models()
+mutations = lazy_mutations()
+```
+
+### Snapshot location
+
+By default, snapshots are written to `data/polars/`. Override that with `output_dir=...` if you want notebook-specific or temporary outputs. You can also pass `db_path=...` to target a specific DuckDB file.
 
 ## Validation
 

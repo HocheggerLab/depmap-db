@@ -52,7 +52,7 @@ def test_database_creation() -> None:
 
         schema_version = get_current_schema_version()
         assert schema_version is not None
-        assert schema_version == "1.1.0"
+        assert schema_version == "1.2.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("schema_version")
@@ -62,6 +62,8 @@ def test_database_creation() -> None:
         assert db_manager.table_exists("gene_expression_wide")
         assert db_manager.table_exists("model_conditions")
         assert db_manager.table_exists("screens")
+        assert db_manager.table_exists("mutations")
+        assert db_manager.table_exists("model_gene_mutation_status")
         assert db_manager.table_exists("data_imports")
         assert not db_manager.table_exists("gene_expression")
 
@@ -79,7 +81,7 @@ def test_in_memory_database() -> None:
         create_tables()
 
         schema_version = get_current_schema_version()
-        assert schema_version == "1.1.0"
+        assert schema_version == "1.2.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("models")

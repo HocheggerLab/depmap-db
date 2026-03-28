@@ -32,7 +32,7 @@ class TableSchema:
 class Schema:
     """Database schema management."""
 
-    CURRENT_VERSION = "1.1.0"
+    CURRENT_VERSION = "1.2.0"
 
     def __init__(self) -> None:
         self.db_manager = get_db_manager()
@@ -206,6 +206,76 @@ class Schema:
                 screen_fpr DOUBLE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_condition_id) REFERENCES model_conditions(model_condition_id),
+                FOREIGN KEY (model_id) REFERENCES models(model_id)
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="mutations",
+                table_type=TableType.CORE_DATA,
+                dependencies=["models"],
+                description="Canonical somatic mutation event table (MAF-like)",
+                sql="""
+            CREATE TABLE IF NOT EXISTS mutations (
+                mutation_id VARCHAR PRIMARY KEY,
+                model_id VARCHAR NOT NULL,
+                chrom VARCHAR,
+                pos BIGINT,
+                ref VARCHAR,
+                alt VARCHAR,
+                variant_type VARCHAR,
+                dna_change VARCHAR,
+                protein_change VARCHAR,
+                hugo_symbol VARCHAR,
+                ensembl_gene_id VARCHAR,
+                entrez_gene_id VARCHAR,
+                hgnc_name VARCHAR,
+                molecular_consequence VARCHAR,
+                vep_impact VARCHAR,
+                af DOUBLE,
+                dp INTEGER,
+                ref_count INTEGER,
+                alt_count INTEGER,
+                gt VARCHAR,
+                sift VARCHAR,
+                polyphen VARCHAR,
+                gnomade_af DOUBLE,
+                gnomadg_af DOUBLE,
+                revel_score DOUBLE,
+                likely_lof BOOLEAN,
+                hotspot BOOLEAN,
+                oncogene_high_impact BOOLEAN,
+                tumor_suppressor_high_impact BOOLEAN,
+                hess_driver BOOLEAN,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (model_id) REFERENCES models(model_id)
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="model_gene_mutation_status",
+                table_type=TableType.DERIVED,
+                dependencies=["mutations", "models"],
+                description="Sparse model-gene mutation status table (mutated pairs only)",
+                sql="""
+            CREATE TABLE IF NOT EXISTS model_gene_mutation_status (
+                model_id VARCHAR NOT NULL,
+                gene_symbol VARCHAR NOT NULL,
+                is_mutated BOOLEAN NOT NULL DEFAULT TRUE,
+                mutation_count INTEGER NOT NULL DEFAULT 1,
+                has_likely_lof BOOLEAN DEFAULT FALSE,
+                has_hotspot BOOLEAN DEFAULT FALSE,
+                has_oncogene_high_impact BOOLEAN DEFAULT FALSE,
+                has_tumor_suppressor_high_impact BOOLEAN DEFAULT FALSE,
+                has_driver BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (model_id, gene_symbol),
                 FOREIGN KEY (model_id) REFERENCES models(model_id)
             )
             """,

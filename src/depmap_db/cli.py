@@ -21,9 +21,16 @@ from .etl.processors import (
     GeneExpressionWideProcessor,
     GeneProcessor,
     ModelProcessor,
+    MutationsProcessor,
 )
 from .etl.processors.base import BaseProcessor
-from .query import GeneQueryService, QueryFormat, SummaryGrouping
+from .query import (
+    GeneQueryService,
+    MutationClass,
+    MutationQueryService,
+    QueryFormat,
+    SummaryGrouping,
+)
 from .utils.constants import (
     PHASE_1_DATASETS,
     SUPPORTED_DATASETS,
@@ -43,6 +50,7 @@ def _get_processor(dataset_name: str) -> BaseProcessor | None:
         "GeneExpression": GeneExpressionWideProcessor,
         "Gene": GeneProcessor,
         "Model": ModelProcessor,
+        "OmicsSomaticMutations": MutationsProcessor,
     }
 
     processor_class = processors.get(dataset_name)
@@ -64,6 +72,11 @@ def _detect_dataset_from_filename(filename: str) -> str | None:
         and "tpm" in filename_lower
     ):
         return "GeneExpression"
+    elif (
+        "omicssomaticmutations" in filename_lower
+        or "somatic_mutations" in filename_lower
+    ):
+        return "OmicsSomaticMutations"
     elif (
         "model" in filename_lower and "data" in filename_lower
     ) or filename_lower.startswith("model"):
@@ -1177,6 +1190,137 @@ def gene_expression_summary(
         output_format,
         title=f"Expression summary for {gene_symbol} by {group_by}",
     )
+
+
+@gene.command("dependency-by-mutation")
+@click.argument("gene_symbol")
+@click.option("--mutation-gene", required=True, help="Gene used to define mutant vs WT cohorts.")
+@click.option(
+    "--mutation-class",
+    type=click.Choice(["any", "likely_lof", "hotspot", "driver"]),
+    default="any",
+    show_default=True,
+    help="Mutation class used to call a model mutant.",
+)
+@click.option("--lineage", help="Exact OncoTree lineage filter.")
+@click.option("--disease", help="Exact OncoTree primary disease filter.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def gene_dependency_by_mutation(
+    gene_symbol: str,
+    mutation_gene: str,
+    mutation_class: MutationClass,
+    lineage: str | None,
+    disease: str | None,
+    output_format: QueryFormat,
+) -> None:
+    """Compare dependency values between mutant and wild-type cohorts."""
+    if not _require_initialized_database():
+        return
+
+    service = GeneQueryService()
+    df = service.get_dependency_by_mutation(
+        gene_symbol,
+        mutation_gene=mutation_gene,
+        mutation_class=mutation_class,
+        lineage=lineage,
+        disease=disease,
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Dependency for {gene_symbol} stratified by {mutation_gene} {mutation_class} mutation status",
+    )
+
+
+@cli.group()
+def model() -> None:
+    """Model-centric query helpers."""
+
+
+@model.command("mutations")
+@click.argument("cell_line")
+@click.option("--gene", help="Filter to a single mutated gene.")
+@click.option("--lof-only", is_flag=True, help="Only include likely loss-of-function events.")
+@click.option("--hotspot-only", is_flag=True, help="Only include hotspot events.")
+@click.option("--driver-only", is_flag=True, help="Only include Hess-driver events.")
+@click.option("--limit", type=int, help="Optional row limit.")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def model_mutations(
+    cell_line: str,
+    gene: str | None,
+    lof_only: bool,
+    hotspot_only: bool,
+    driver_only: bool,
+    limit: int | None,
+    output_format: QueryFormat,
+) -> None:
+    """List mutation events for a model/cell line."""
+    if not _require_initialized_database():
+        return
+
+    service = MutationQueryService()
+    df = service.get_model_mutations(
+        cell_line,
+        gene=gene,
+        lof_only=lof_only,
+        hotspot_only=hotspot_only,
+        driver_only=driver_only,
+        limit=limit,
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Mutation events for {cell_line}",
+    )
+
+
+@cli.group()
+def lineage() -> None:
+    """Lineage-centric query helpers."""
+
+
+@lineage.command("mutation-frequency")
+@click.argument("lineage_name")
+@click.option("--limit", type=int, default=20, show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def lineage_mutation_frequency(
+    lineage_name: str,
+    limit: int,
+    output_format: QueryFormat,
+) -> None:
+    """Rank frequently mutated genes in a lineage."""
+    if not _require_initialized_database():
+        return
+
+    service = MutationQueryService()
+    df = service.get_lineage_mutation_frequency(lineage_name, limit=limit)
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Mutation frequency in {lineage_name}",
+    )
+
 
 
 if __name__ == "__main__":
