@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Final
@@ -18,16 +19,70 @@ GENE_ALIASES: Final[dict[str, str]] = {
     "B55alpha": "PPP2R2A",
 }
 
-HIGHLIGHT_TARGETS: Final[tuple[str, ...]] = ("HELA", "RPE-1")
+
+@dataclass(frozen=True)
+class HighlightTarget:
+    """One explicitly requested model highlight for notebook reporting."""
+
+    label: str
+    plot_label: str
+    aliases: tuple[str, ...]
+
+
+HIGHLIGHT_TARGETS: Final[tuple[HighlightTarget, ...]] = (
+    HighlightTarget(
+        label="HeLa",
+        plot_label="HeLa",
+        aliases=("ACH-001086", "HeLa", "HELA_CERVIX"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss111",
+        plot_label="ss111",
+        aliases=("ACH-002466", "RPE1-ss111", "RPE1SS111_ENGINEERED"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss119",
+        plot_label="ss119",
+        aliases=("ACH-002465", "RPE1-ss119", "RPE1SS119_ENGINEERED"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss77",
+        plot_label="ss77",
+        aliases=("ACH-002463", "RPE1-ss77", "RPE1SS77_ENGINEERED"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss51",
+        plot_label="ss51",
+        aliases=("ACH-002467", "RPE1-ss51", "RPE1SS51_ENGINEERED"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss48",
+        plot_label="ss48",
+        aliases=("ACH-002462", "RPE1-ss48", "RPE1SS48_ENGINEERED"),
+    ),
+    HighlightTarget(
+        label="RPE1-ss6",
+        plot_label="ss6",
+        aliases=("ACH-002464", "RPE1-ss6", "RPE1SS6_ENGINEERED"),
+    ),
+)
+
 MODEL_NAME_COLUMNS: Final[tuple[str, ...]] = (
     "cell_line_name",
     "stripped_cell_line_name",
     "ccle_name",
 )
+MODEL_MATCH_COLUMNS: Final[tuple[str, ...]] = ("model_id", *MODEL_NAME_COLUMNS)
 
 
 def _normalise_label(value: str) -> str:
     return "".join(char for char in value.upper() if char.isalnum())
+
+
+def _target_aliases(target: str | HighlightTarget) -> tuple[str, ...]:
+    if isinstance(target, HighlightTarget):
+        return target.aliases
+    return (target,)
 
 
 def build_expression_dataset(
@@ -94,17 +149,20 @@ def pearson_r(data: pl.DataFrame, x_col: str = "x", y_col: str = "y") -> float:
     return float(data.select(pl.corr(x_col, y_col)).item())
 
 
-def exact_model_matches(data: pl.DataFrame, target: str) -> pl.DataFrame:
+def exact_model_matches(
+    data: pl.DataFrame,
+    target: str | HighlightTarget,
+) -> pl.DataFrame:
     """Return exact-ish matches after punctuation-insensitive normalisation."""
-    normalised_target = _normalise_label(target)
+    normalised_targets = {_normalise_label(alias) for alias in _target_aliases(target)}
     match_expr = pl.lit(False)
-    for column in MODEL_NAME_COLUMNS:
-        match_expr = match_expr | (
-            pl.col(column)
-            .fill_null("")
-            .map_elements(_normalise_label, return_dtype=pl.String)
-            == normalised_target
+    for column in MODEL_MATCH_COLUMNS:
+        normalised_column = pl.col(column).fill_null("").map_elements(
+            _normalise_label,
+            return_dtype=pl.String,
         )
+        for normalised_target in normalised_targets:
+            match_expr = match_expr | (normalised_column == normalised_target)
 
     return (
         data.filter(match_expr)
@@ -152,7 +210,7 @@ def nearest_model_candidates(
 
     token_matches: list[dict[str, object]] = []
     for row in records:
-        for column in MODEL_NAME_COLUMNS:
+        for column in MODEL_MATCH_COLUMNS:
             raw_name = row[column]
             if raw_name is None:
                 continue
@@ -166,7 +224,7 @@ def nearest_model_candidates(
 
     names: dict[str, dict[str, object]] = {}
     for row in records:
-        for column in MODEL_NAME_COLUMNS:
+        for column in MODEL_MATCH_COLUMNS:
             raw_name = row[column]
             if raw_name is None:
                 continue
@@ -191,14 +249,17 @@ def nearest_model_candidates(
     return pl.DataFrame(rows).unique().sort("cell_line_name")
 
 
-def build_highlight_table(data: pl.DataFrame) -> pl.DataFrame:
+def build_highlight_table(
+    data: pl.DataFrame,
+    targets: tuple[HighlightTarget, ...] = HIGHLIGHT_TARGETS,
+) -> pl.DataFrame:
     """Combine exact highlight hits into a tidy table for reporting."""
     frames: list[pl.DataFrame] = []
-    for target in HIGHLIGHT_TARGETS:
+    for target in targets:
         matches = exact_model_matches(data, target)
         if matches.height == 0:
             continue
-        frames.append(matches.with_columns(pl.lit(target).alias("highlight_target")))
+        frames.append(matches.with_columns(pl.lit(target.label).alias("highlight_target")))
 
     if not frames:
         return pl.DataFrame(
