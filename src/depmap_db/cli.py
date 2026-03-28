@@ -22,12 +22,14 @@ from .etl.processors import (
     GeneProcessor,
     ModelProcessor,
     MutationsProcessor,
+    ProteinExpressionMSWideProcessor,
 )
 from .etl.processors.base import BaseProcessor
 from .query import (
     GeneQueryService,
     MutationClass,
     MutationQueryService,
+    ProteinQueryService,
     QueryFormat,
     SummaryGrouping,
 )
@@ -51,6 +53,7 @@ def _get_processor(dataset_name: str) -> BaseProcessor | None:
         "Gene": GeneProcessor,
         "Model": ModelProcessor,
         "OmicsSomaticMutations": MutationsProcessor,
+        "ProteomicsMSGygi": ProteinExpressionMSWideProcessor,
     }
 
     processor_class = processors.get(dataset_name)
@@ -88,6 +91,8 @@ def _detect_dataset_from_filename(filename: str) -> str | None:
         or "model_condition" in filename_lower
     ):
         return "ModelCondition"
+    elif "harmonized_ms_ccle_gygi" in filename_lower:
+        return "ProteomicsMSGygi"
 
     return None
 
@@ -365,6 +370,32 @@ Size: {db_size:,} bytes"""
             console.print(table_info)
         else:
             console.print("[yellow]No tables found[/yellow]")
+
+        if db_manager.table_exists("protein_features"):
+            protein_stats = db_manager.execute(
+                """
+                SELECT
+                    COUNT(*) AS protein_count,
+                    COUNT(*) FILTER (WHERE gene_symbol IS NOT NULL) AS mapped_gene_symbols,
+                    COUNT(*) FILTER (WHERE local_gene_id IS NOT NULL) AS mapped_local_genes,
+                    MIN(release_label) AS release_label
+                FROM protein_features
+                WHERE source_dataset = 'ProteomicsMSGygi'
+                """
+            ).fetchone()
+            if protein_stats and int(protein_stats[0]) > 0:
+                console.print(
+                    Panel(
+                        (
+                            f"Proteins in bridge: {int(protein_stats[0]):,}\n"
+                            f"Mapped to gene symbol: {int(protein_stats[1]):,}\n"
+                            f"Mapped to local genes row: {int(protein_stats[2]):,}\n"
+                            f"Release track: {protein_stats[3] or 'unknown'}"
+                        ),
+                        title="Proteomics (Gygi MS)",
+                        title_align="left",
+                    )
+                )
 
     except (OSError, RuntimeError) as e:
         console.print(f"[red]Error getting table information: {e}[/red]")
@@ -1321,6 +1352,97 @@ def lineage_mutation_frequency(
         title=f"Mutation frequency in {lineage_name}",
     )
 
+
+@cli.group()
+def protein() -> None:
+    """Protein-centric query helpers for the Gygi MS proteomics matrix."""
+
+
+@protein.command("mapping-summary")
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def protein_mapping_summary(output_format: QueryFormat) -> None:
+    """Summarize UniProt→gene bridge coverage for proteomics."""
+    if not _require_initialized_database():
+        return
+
+    service = ProteinQueryService()
+    df = service.get_mapping_summary()
+    _render_dataframe(df, output_format, title="Proteomics bridge summary")
+
+
+@protein.command("search")
+@click.argument("term")
+@click.option("--mapped-only", is_flag=True, help="Only show proteins mapped to local genes.")
+@click.option("--limit", type=int, default=20, show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def protein_search(
+    term: str,
+    mapped_only: bool,
+    limit: int,
+    output_format: QueryFormat,
+) -> None:
+    """Search protein bridge rows by accession, gene symbol, or label."""
+    if not _require_initialized_database():
+        return
+
+    service = ProteinQueryService()
+    df = service.search_proteins(term, mapped_only=mapped_only, limit=limit)
+    _render_dataframe(df, output_format, title=f"Protein search: {term}")
+
+
+@protein.command("expression-summary")
+@click.argument("protein_query")
+@click.option(
+    "--group-by",
+    type=click.Choice(["lineage", "disease"]),
+    default="lineage",
+    show_default=True,
+    help="Group abundance values by lineage or primary disease.",
+)
+@click.option("--limit", type=int, default=15, show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "csv", "json"]),
+    default="table",
+    show_default=True,
+)
+@handle_exceptions
+def protein_expression_summary(
+    protein_query: str,
+    group_by: SummaryGrouping,
+    limit: int,
+    output_format: QueryFormat,
+) -> None:
+    """Summarize Gygi MS protein abundance across cancer groups."""
+    if not _require_initialized_database():
+        return
+
+    service = ProteinQueryService()
+    df = service.get_expression_summary(
+        protein_query,
+        group_by=group_by,
+        limit=limit,
+    )
+    _render_dataframe(
+        df,
+        output_format,
+        title=f"Protein abundance summary for {protein_query} by {group_by}",
+    )
 
 
 if __name__ == "__main__":

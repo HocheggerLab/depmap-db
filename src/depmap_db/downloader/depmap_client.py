@@ -19,7 +19,11 @@ from rich.progress import (
 )
 
 from ..config import get_logger, get_settings
-from ..utils.constants import DEPMAP_FILES, SUPPORTED_DATASETS
+from ..utils.constants import (
+    DEPMAP_FILES,
+    SUPPORTED_DATASETS,
+    get_dataset_release_label,
+)
 from ..utils.helpers import format_file_size, is_valid_depmap_file
 from .exceptions import DownloadError, NetworkError, ValidationError
 
@@ -146,7 +150,12 @@ class DepMapClient:
         sources: dict[str, ManifestFile] = {}
         for dataset_name in datasets:
             filename = DEPMAP_FILES[dataset_name].filename
-            sources[dataset_name] = await self.resolve_manifest_file(filename)
+            release_label = get_dataset_release_label(
+                dataset_name, self.release_label
+            )
+            sources[dataset_name] = await self.resolve_manifest_file(
+                filename, release_label=release_label
+            )
         return sources
 
     async def get_available_files(self) -> dict[str, dict[str, object]]:

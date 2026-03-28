@@ -36,6 +36,8 @@ def test_dataset_tables_use_wide_matrix_storage() -> None:
     """Core matrix datasets should point at wide canonical tables."""
     assert DEPMAP_FILES["CRISPRGeneEffect"].table_name == "gene_effects_wide"
     assert DEPMAP_FILES["GeneExpression"].table_name == "gene_expression_wide"
+    assert DEPMAP_FILES["ProteomicsMSGygi"].table_name == "protein_expression_ms_wide"
+    assert DEPMAP_FILES["ProteomicsMSGygi"].release_track == "proteomics"
 
 
 def test_database_creation() -> None:
@@ -52,7 +54,7 @@ def test_database_creation() -> None:
 
         schema_version = get_current_schema_version()
         assert schema_version is not None
-        assert schema_version == "1.2.0"
+        assert schema_version == "1.3.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("schema_version")
@@ -62,6 +64,8 @@ def test_database_creation() -> None:
         assert db_manager.table_exists("gene_expression_wide")
         assert db_manager.table_exists("model_conditions")
         assert db_manager.table_exists("screens")
+        assert db_manager.table_exists("protein_features")
+        assert db_manager.table_exists("protein_expression_ms_wide")
         assert db_manager.table_exists("mutations")
         assert db_manager.table_exists("model_gene_mutation_status")
         assert db_manager.table_exists("data_imports")
@@ -81,7 +85,7 @@ def test_in_memory_database() -> None:
         create_tables()
 
         schema_version = get_current_schema_version()
-        assert schema_version == "1.2.0"
+        assert schema_version == "1.3.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("models")

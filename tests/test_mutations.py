@@ -44,7 +44,7 @@ def setup_test_db() -> Generator[None]:
 def test_mutations_schema_exists(setup_test_db: None) -> None:
     """Test that mutations tables are created in schema."""
     schema_version = get_current_schema_version()
-    assert schema_version == "1.2.0"
+    assert schema_version == "1.3.0"
 
     db_manager = get_db_manager()
     assert db_manager.table_exists("mutations")

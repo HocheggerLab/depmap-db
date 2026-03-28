@@ -13,7 +13,11 @@ os.environ.setdefault("LOG_FILE_PATH", "logs/app.log")
 from depmap_db.cli import cli
 from depmap_db.config import reload_settings
 from depmap_db.database import create_tables, get_db_manager, reset_db_manager
-from depmap_db.query import GeneQueryService, MutationQueryService
+from depmap_db.query import (
+    GeneQueryService,
+    MutationQueryService,
+    ProteinQueryService,
+)
 
 
 @pytest.fixture()
@@ -32,6 +36,8 @@ def populated_database(tmp_path: Path) -> Path:
     db.execute('ALTER TABLE gene_effects_wide ADD COLUMN "MASTL" DOUBLE')
     db.execute('ALTER TABLE gene_expression_wide ADD COLUMN "HAPSTR1" DOUBLE')
     db.execute('ALTER TABLE gene_expression_wide ADD COLUMN "MASTL" DOUBLE')
+    db.execute('ALTER TABLE protein_expression_ms_wide ADD COLUMN "protein_A0AV96" DOUBLE')
+    db.execute('ALTER TABLE protein_expression_ms_wide ADD COLUMN "protein_Q99729_3" DOUBLE')
 
     model_rows = [
         (
@@ -86,6 +92,15 @@ def populated_database(tmp_path: Path) -> Path:
         model_rows,
     )
 
+    gene_rows = [
+        ("RBM47", "RBM47", 54502),
+        ("HNRNPAB", "HNRNPAB", 3182),
+    ]
+    db.execute_many(
+        "INSERT INTO genes (gene_id, hugo_symbol, entrez_id) VALUES (?, ?, ?)",
+        gene_rows,
+    )
+
     dependency_rows = [
         ("ACH-000001", -1.2, -0.8),
         ("ACH-000002", -0.8, -0.3),
@@ -106,6 +121,88 @@ def populated_database(tmp_path: Path) -> Path:
     db.execute_many(
         'INSERT INTO gene_expression_wide (model_id, "HAPSTR1", "MASTL") VALUES (?, ?, ?)',
         expression_rows,
+    )
+
+    protein_feature_rows = [
+        (
+            "A0AV96",
+            "A0AV96",
+            "protein_A0AV96",
+            "RBM47_HUMAN",
+            "RNA-binding protein 47",
+            "RBM47",
+            54502,
+            "ENST00000295971.12;ENST00000381793.6",
+            "RBM47",
+            "RBM47",
+            54502,
+            None,
+            True,
+            "exact",
+            "mapped_to_local_gene",
+            "ProteomicsMSGygi",
+            "harmonized_MS_CCLE_Gygi.csv",
+            "proteomics_ms",
+            "Harmonized Public Proteomics 24Q4",
+        ),
+        (
+            "Q99729-3",
+            "Q99729",
+            "protein_Q99729_3",
+            "ROAA_HUMAN",
+            "Isoform 3 of Heterogeneous nuclear ribonucleoprotein A/B",
+            "HNRNPAB",
+            None,
+            "ENST00000355836.9;ENST00000506259.5",
+            "HNRNPAB",
+            "HNRNPAB",
+            3182,
+            None,
+            True,
+            "base_accession_fallback",
+            "mapped_to_local_gene",
+            "ProteomicsMSGygi",
+            "harmonized_MS_CCLE_Gygi.csv",
+            "proteomics_ms",
+            "Harmonized Public Proteomics 24Q4",
+        ),
+    ]
+    db.execute_many(
+        """
+        INSERT INTO protein_features (
+            protein_accession,
+            protein_accession_base,
+            storage_column_name,
+            protein_entry_name,
+            protein_name,
+            gene_symbol,
+            entrez_id,
+            ensembl_transcript_ids,
+            local_gene_id,
+            local_hugo_symbol,
+            local_entrez_id,
+            local_ensembl_id,
+            is_reviewed,
+            mapping_method,
+            mapping_status,
+            source_dataset,
+            source_filename,
+            modality,
+            release_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        protein_feature_rows,
+    )
+
+    protein_rows = [
+        ("ACH-000001", 0.3, 1.2),
+        ("ACH-000002", 0.1, 1.0),
+        ("ACH-000003", -0.4, -0.5),
+        ("ACH-000004", -0.2, -0.7),
+    ]
+    db.execute_many(
+        'INSERT INTO protein_expression_ms_wide (model_id, "protein_A0AV96", "protein_Q99729_3") VALUES (?, ?, ?)',
+        protein_rows,
     )
 
     mutation_rows = [
@@ -460,6 +557,35 @@ def test_dependency_by_mutation_cli_supports_json(
     assert result.exit_code == 0
     assert '"mutation_gene":"TP53"' in result.output
     assert '"mutant_model_count":2' in result.output
+
+
+def test_protein_expression_summary_supports_gene_resolution(
+    populated_database: Path,
+) -> None:
+    """Protein summaries should resolve a unique mapped gene symbol."""
+    service = ProteinQueryService()
+
+    result = service.get_expression_summary("RBM47", group_by="lineage")
+
+    assert list(result["group_name"]) == ["Breast", "Lung"]
+    assert result.loc[0, "mean_abundance"] == pytest.approx(0.2)
+    assert result.loc[1, "mean_abundance"] == pytest.approx(-0.3)
+
+
+def test_protein_mapping_summary_cli_supports_json(
+    populated_database: Path,
+) -> None:
+    """The protein CLI should expose bridge coverage summaries."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        cli,
+        ["protein", "mapping-summary", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    assert '"source_dataset":"ProteomicsMSGygi"' in result.output
+    assert '"protein_count":2' in result.output
 
 
 def test_polars_is_not_exposed_as_a_cli_group() -> None:

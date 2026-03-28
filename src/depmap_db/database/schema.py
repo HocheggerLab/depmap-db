@@ -32,7 +32,7 @@ class TableSchema:
 class Schema:
     """Database schema management."""
 
-    CURRENT_VERSION = "1.2.0"
+    CURRENT_VERSION = "1.3.0"
 
     def __init__(self) -> None:
         self.db_manager = get_db_manager()
@@ -148,6 +148,43 @@ class Schema:
 
         self._add_table(
             TableSchema(
+                name="protein_features",
+                table_type=TableType.METADATA,
+                dependencies=["genes"],
+                description=(
+                    "Protein feature bridge for harmonized CCLE Gygi mass-spec "
+                    "proteomics accessions and local gene mappings"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS protein_features (
+                protein_accession VARCHAR PRIMARY KEY,
+                protein_accession_base VARCHAR,
+                storage_column_name VARCHAR NOT NULL,
+                protein_entry_name VARCHAR,
+                protein_name TEXT,
+                gene_symbol VARCHAR,
+                entrez_id INTEGER,
+                ensembl_transcript_ids TEXT,
+                local_gene_id VARCHAR,
+                local_hugo_symbol VARCHAR,
+                local_entrez_id INTEGER,
+                local_ensembl_id VARCHAR,
+                is_reviewed BOOLEAN,
+                mapping_method VARCHAR,
+                mapping_status VARCHAR,
+                source_dataset VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                modality VARCHAR,
+                release_label VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (local_gene_id) REFERENCES genes(gene_id)
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
                 name="gene_effects_wide",
                 table_type=TableType.CORE_DATA,
                 dependencies=["models"],
@@ -180,6 +217,26 @@ class Schema:
                 FOREIGN KEY (model_id) REFERENCES models(model_id),
                 FOREIGN KEY (model_condition_id) REFERENCES model_conditions(model_condition_id)
                 -- Gene columns are added dynamically during data loading
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="protein_expression_ms_wide",
+                table_type=TableType.CORE_DATA,
+                dependencies=["models", "protein_features"],
+                description=(
+                    "Canonical harmonized Gygi CCLE mass-spec proteomics matrix "
+                    "(models x protein accessions)"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS protein_expression_ms_wide (
+                model_id VARCHAR PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (model_id) REFERENCES models(model_id)
+                -- Protein accession columns are added dynamically during data loading
             )
             """,
             )
@@ -405,8 +462,14 @@ def _update_schema_version(
     description = description or f"Schema version {version}"
 
     db_manager.execute(
-        "INSERT INTO schema_version (version, description) VALUES (?, ?)",
-        [version, description],
+        """
+        INSERT INTO schema_version (version, description)
+        SELECT ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM schema_version WHERE version = ?
+        )
+        """,
+        [version, description, version],
     )
 
     logger.info("Updated schema version to %s", version)

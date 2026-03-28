@@ -9,13 +9,18 @@ The repository treats datasets according to their natural structure:
 - **CRISPR gene effect** → canonical table: `gene_effects_wide` (wide matrix)
 - **Gene expression** → canonical table: `gene_expression_wide` (wide matrix)
 - **Somatic mutations** → canonical table: `mutations` (long event table) + derived `model_gene_mutation_status` (sparse)
+- **Proteomics (Gygi MS)** → canonical table: `protein_expression_ms_wide` (wide matrix) + `protein_features` UniProt→gene bridge
 
-### Why wide is canonical for dependency/expression
+### Why wide is canonical for dependency/expression/proteomics
 
-- DepMap publishes both datasets as model-by-gene matrices already.
+- DepMap publishes these modalities as model-by-feature matrices already.
 - The export layer and downstream analysis in this repo are wide-oriented.
 - Supporting a partial long-path for expression but a wide-path for dependency made the code harder to reason about.
 - A single canonical storage model is simpler than maintaining half-integrated wide/long toggles.
+
+For proteomics, the initial implementation targets the **DepMap Harmonized MS CCLE Gygi** matrix only (`harmonized_MS_CCLE_Gygi.csv`). The corresponding release label currently resolves to **Harmonized Public Proteomics 24Q4**, which may move on a different release track from the core DepMap release. This repo records that release label explicitly rather than assuming it matches the main DepMap quarter.
+
+The file is stored as-published. DepMap labels it as *harmonized*, but this repo does **not** claim a more specific normalization meaning unless DepMap documents that clearly in the source release.
 
 Long-format projections can still be added later as **derived views or exports** if a concrete use-case needs them, but the database now has one primary storage model for both matrix datasets.
 
@@ -77,6 +82,20 @@ depmap-db gene dependency-models MASTL --lineage Breast --output mastl_breast.cs
 
 # Summarise expression by lineage for a gene
 depmap-db gene expression-summary HAPSTR1 --group-by lineage --limit 10
+
+# Inspect Gygi MS bridge coverage
+# shows how many UniProt accessions map to gene symbols / local genes
+# and reports the proteomics release label tracked for the dataset
+
+depmap-db protein mapping-summary
+
+# Search the Gygi protein bridge by accession, gene symbol, or protein label
+
+depmap-db protein search RBM47
+
+# Summarise Gygi MS abundance by lineage for one protein accession
+
+depmap-db protein expression-summary A0AV96 --group-by lineage --limit 10
 ```
 
 `dependency-models` can also print to stdout in table, CSV, or JSON format via `--format`.
@@ -177,8 +196,10 @@ That is what `depmap_db.polars` does for you.
 
 - `models`
 - `genes`
+- `protein_features`
 - `gene_effects_wide`
 - `gene_expression_wide`
+- `protein_expression_ms_wide`
 - `mutations`
 - `model_gene_mutation_status`
 

@@ -9,30 +9,44 @@ from pathlib import Path
 from typing import Any
 
 from ..config import get_settings
-from ..utils.constants import DEPMAP_FILES
+from ..utils.constants import DEPMAP_FILES, get_dataset_release_label
 from .file_manager import FileManager
 
 
 @dataclass
 class ReleaseSnapshot:
-    """A lightweight description of the configured release."""
+    """A lightweight description of the configured release state."""
 
     release_label: str
     release_url: str
     datasets: dict[str, str]
+    dataset_releases: dict[str, str]
     generated_at: str
 
     @classmethod
     def current(cls, datasets: list[str]) -> ReleaseSnapshot:
         """Create a snapshot from current configuration and dataset mapping."""
         settings = get_settings()
+        dataset_releases = {
+            dataset_name: get_dataset_release_label(
+                dataset_name, settings.depmap.release_label
+            )
+            for dataset_name in datasets
+        }
+        distinct_release_labels = sorted(set(dataset_releases.values()))
+        summary_release_label = (
+            distinct_release_labels[0]
+            if len(distinct_release_labels) == 1
+            else "mixed"
+        )
         return cls(
-            release_label=settings.depmap.release_label,
+            release_label=summary_release_label,
             release_url=settings.depmap.release_url,
             datasets={
                 dataset_name: DEPMAP_FILES[dataset_name].filename
                 for dataset_name in datasets
             },
+            dataset_releases=dataset_releases,
             generated_at=datetime.now(UTC).isoformat(),
         )
 
@@ -62,6 +76,9 @@ class ReleaseTracker:
             return None
 
         data = json.loads(self.tracking_file.read_text())
+        if "dataset_releases" not in data:
+            legacy_release_label = data.get("release_label") or "unknown"
+            data["dataset_releases"] = dict.fromkeys(data.get("datasets", {}), legacy_release_label)
         return ReleaseSnapshot(**data)
 
     def save(self, snapshot: ReleaseSnapshot) -> None:
@@ -88,7 +105,10 @@ class RefreshPlanner:
         cached_datasets: list[str] = []
         datasets_to_download: list[str] = []
 
-        release_changed = previous is None or previous.release_label != snapshot.release_label
+        release_changed = (
+            previous is None
+            or previous.dataset_releases != snapshot.dataset_releases
+        )
         filenames_changed = previous is None or previous.datasets != snapshot.datasets
 
         for dataset_name in datasets:
@@ -104,10 +124,7 @@ class RefreshPlanner:
         if previous is None:
             reason = "no previous release has been applied"
         elif release_changed:
-            reason = (
-                "configured release label changed "
-                f"from {previous.release_label} to {snapshot.release_label}"
-            )
+            reason = "configured dataset release labels changed"
         elif filenames_changed:
             reason = "dataset-to-filename mapping changed"
         elif datasets_to_download:
@@ -134,6 +151,7 @@ def refresh_plan_to_dict(plan: RefreshPlan) -> dict[str, Any]:
         "release_label": plan.snapshot.release_label,
         "release_url": plan.snapshot.release_url,
         "datasets": plan.datasets,
+        "dataset_releases": plan.snapshot.dataset_releases,
         "datasets_to_download": plan.datasets_to_download,
         "cached_datasets": plan.cached_datasets,
         "reason": plan.reason,

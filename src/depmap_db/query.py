@@ -1,4 +1,6 @@
-"""Query helpers for gene-/model-/lineage-level lookups on DepMap data."""
+"""Query helpers for gene-/protein-/model-/lineage-level lookups on DepMap data."""
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
@@ -169,7 +171,7 @@ class GeneQueryService:
         where_clause, parameters = self._build_model_filters(lineage, disease)
         mutation_condition = self._mutation_class_condition("mgms", mutation_class)
         if where_clause:
-            where_clause = f"{where_clause} AND gef.\"{dependency_column}\" IS NOT NULL"
+            where_clause = f'{where_clause} AND gef."{dependency_column}" IS NOT NULL'
         else:
             where_clause = f'WHERE gef."{dependency_column}" IS NOT NULL'
 
@@ -274,6 +276,148 @@ class GeneQueryService:
             "driver": f"{alias}.has_driver = TRUE",
         }
         return conditions[mutation_class]
+
+
+class ProteinQueryService:
+    """Query service for protein-centric lookups on the Gygi MS matrix."""
+
+    def __init__(self, db_manager: DatabaseManager | None = None) -> None:
+        self.db_manager = db_manager or get_db_manager()
+
+    def get_mapping_summary(self) -> pd.DataFrame:
+        """Return high-level bridge coverage statistics."""
+        query = """
+        SELECT
+            source_dataset,
+            release_label,
+            COUNT(*) AS protein_count,
+            COUNT(*) FILTER (WHERE gene_symbol IS NOT NULL) AS mapped_gene_symbols,
+            COUNT(*) FILTER (WHERE local_gene_id IS NOT NULL) AS mapped_local_genes,
+            COUNT(*) FILTER (
+                WHERE protein_accession <> protein_accession_base
+            ) AS isoform_accessions,
+            COUNT(*) FILTER (
+                WHERE mapping_method = 'base_accession_fallback'
+            ) AS base_accession_fallbacks
+        FROM protein_features
+        GROUP BY source_dataset, release_label
+        ORDER BY source_dataset, release_label
+        """
+        return self.db_manager.fetch_df(query)
+
+    def search_proteins(
+        self,
+        term: str,
+        *,
+        mapped_only: bool = False,
+        limit: int = 20,
+    ) -> pd.DataFrame:
+        """Search the protein bridge by accession, gene symbol, or label."""
+        where_clauses = [
+            "("
+            "lower(protein_accession) LIKE lower(?) "
+            "OR lower(COALESCE(gene_symbol, '')) LIKE lower(?) "
+            "OR lower(COALESCE(local_hugo_symbol, '')) LIKE lower(?) "
+            "OR lower(COALESCE(protein_name, '')) LIKE lower(?)"
+            ")"
+        ]
+        params = [f"%{term}%"] * 4
+        if mapped_only:
+            where_clauses.append("local_gene_id IS NOT NULL")
+
+        query = f"""
+        SELECT
+            protein_accession,
+            gene_symbol,
+            local_gene_id,
+            local_hugo_symbol,
+            protein_name,
+            mapping_method,
+            mapping_status,
+            release_label
+        FROM protein_features
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY
+            CASE WHEN lower(protein_accession) = lower(?) THEN 0 ELSE 1 END,
+            CASE WHEN lower(COALESCE(gene_symbol, '')) = lower(?) THEN 0 ELSE 1 END,
+            protein_accession
+        LIMIT ?
+        """
+        return self.db_manager.fetch_df(query, [*params, term, term, limit])
+
+    def get_expression_summary(
+        self,
+        protein_query: str,
+        *,
+        group_by: SummaryGrouping = "lineage",
+        limit: int | None = None,
+    ) -> pd.DataFrame:
+        """Summarize protein abundance values by lineage or disease."""
+        resolved = self._resolve_protein(protein_query)
+        grouping_column = _GROUPING_COLUMN_MAP[group_by]
+        limit_clause = f"LIMIT {limit}" if limit is not None else ""
+        storage_column = str(resolved["storage_column_name"])
+
+        query = f"""
+        SELECT
+            ? AS protein_accession,
+            ? AS gene_symbol,
+            m.{grouping_column} AS group_name,
+            COUNT(pw."{storage_column}") AS model_count,
+            AVG(pw."{storage_column}") AS mean_abundance,
+            MEDIAN(pw."{storage_column}") AS median_abundance,
+            MIN(pw."{storage_column}") AS min_abundance,
+            MAX(pw."{storage_column}") AS max_abundance
+        FROM protein_expression_ms_wide pw
+        INNER JOIN models m ON m.model_id = pw.model_id
+        WHERE m.{grouping_column} IS NOT NULL
+          AND pw."{storage_column}" IS NOT NULL
+        GROUP BY 1, 2, 3
+        ORDER BY mean_abundance DESC, model_count DESC, group_name ASC
+        {limit_clause}
+        """
+        return self.db_manager.fetch_df(
+            query,
+            [resolved["protein_accession"], resolved.get("gene_symbol")],
+        )
+
+    def _resolve_protein(self, protein_query: str) -> pd.Series:
+        """Resolve a protein accession or gene symbol to a single bridge row."""
+        query = """
+        SELECT
+            protein_accession,
+            storage_column_name,
+            gene_symbol,
+            local_gene_id,
+            protein_name,
+            mapping_status
+        FROM protein_features
+        WHERE lower(protein_accession) = lower(?)
+           OR lower(storage_column_name) = lower(?)
+           OR lower(COALESCE(gene_symbol, '')) = lower(?)
+           OR lower(COALESCE(local_hugo_symbol, '')) = lower(?)
+        ORDER BY
+            CASE WHEN lower(protein_accession) = lower(?) THEN 0 ELSE 1 END,
+            CASE WHEN lower(storage_column_name) = lower(?) THEN 0 ELSE 1 END,
+            CASE WHEN local_gene_id IS NOT NULL THEN 0 ELSE 1 END,
+            protein_accession
+        """
+        params = [protein_query, protein_query, protein_query, protein_query] + [
+            protein_query,
+            protein_query,
+        ]
+        result = self.db_manager.fetch_df(query, params)
+        if result.empty:
+            raise ValueError(f"Protein '{protein_query}' was not found.")
+        if len(result) > 1:
+            choices = ", ".join(
+                f"{row.protein_accession} ({row.gene_symbol or 'no-gene'})"
+                for row in result.head(10).itertuples()
+            )
+            raise ValueError(
+                f"Protein query '{protein_query}' matched multiple proteins: {choices}"
+            )
+        return result.iloc[0]
 
 
 class MutationQueryService:

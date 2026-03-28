@@ -6,6 +6,7 @@ from .gene_effect_wide import GeneEffectWideProcessor
 from .gene_expression_wide import GeneExpressionWideProcessor
 from .model import ModelProcessor
 from .mutations import MutationsProcessor
+from .protein_expression_ms_wide import ProteinExpressionMSWideProcessor
 
 __all__ = [
     "BaseProcessor",
@@ -15,4 +16,5 @@ __all__ = [
     "GeneProcessor",
     "ModelProcessor",
     "MutationsProcessor",
+    "ProteinExpressionMSWideProcessor",
 ]

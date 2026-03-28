@@ -21,8 +21,10 @@ from .database import DatabaseManager
 SUPPORTED_POLARS_TABLES: Final[tuple[str, ...]] = (
     "models",
     "genes",
+    "protein_features",
     "gene_effects_wide",
     "gene_expression_wide",
+    "protein_expression_ms_wide",
     "mutations",
     "model_gene_mutation_status",
 )
