@@ -38,6 +38,10 @@ def test_dataset_tables_use_wide_matrix_storage() -> None:
     assert DEPMAP_FILES["GeneExpression"].table_name == "gene_expression_wide"
     assert DEPMAP_FILES["ProteomicsMSGygi"].table_name == "protein_expression_ms_wide"
     assert DEPMAP_FILES["ProteomicsMSGygi"].release_track == "proteomics"
+    assert DEPMAP_FILES["PRISMPrimaryRepurposingExtended"].table_name == "drug_response_primary_wide"
+    assert DEPMAP_FILES["PRISMPrimaryRepurposingExtended"].release_track == "prism_primary"
+    assert DEPMAP_FILES["PRISMSecondaryDoseResponseCurveParameters"].table_name == "drug_response_secondary"
+    assert DEPMAP_FILES["PRISMSecondaryDoseResponseCurveParameters"].release_track == "prism_secondary"
 
 
 def test_database_creation() -> None:
@@ -54,7 +58,7 @@ def test_database_creation() -> None:
 
         schema_version = get_current_schema_version()
         assert schema_version is not None
-        assert schema_version == "1.3.0"
+        assert schema_version == "1.4.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("schema_version")
@@ -66,6 +70,11 @@ def test_database_creation() -> None:
         assert db_manager.table_exists("screens")
         assert db_manager.table_exists("protein_features")
         assert db_manager.table_exists("protein_expression_ms_wide")
+        assert db_manager.table_exists("compounds")
+        assert db_manager.table_exists("compound_targets")
+        assert db_manager.table_exists("drug_screens")
+        assert db_manager.table_exists("drug_response_primary_wide")
+        assert db_manager.table_exists("drug_response_secondary")
         assert db_manager.table_exists("mutations")
         assert db_manager.table_exists("model_gene_mutation_status")
         assert db_manager.table_exists("data_imports")
@@ -85,7 +94,7 @@ def test_in_memory_database() -> None:
         create_tables()
 
         schema_version = get_current_schema_version()
-        assert schema_version == "1.3.0"
+        assert schema_version == "1.4.0"
 
         db_manager = get_db_manager()
         assert db_manager.table_exists("models")

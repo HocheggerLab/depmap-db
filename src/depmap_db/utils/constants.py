@@ -107,6 +107,42 @@ DEPMAP_FILES: dict[str, DatasetInfo] = {
         release_track="proteomics",
         release_label_override="Harmonized Public Proteomics 24Q4",
     ),
+    "PRISMPrimaryRepurposingExtended": DatasetInfo(
+        filename="Repurposing_Public_24Q2_Extended_Primary_Data_Matrix.csv",
+        description=(
+            "PRISM primary repurposing response matrix stored as published in "
+            "compound-by-model wide form."
+        ),
+        table_name="drug_response_primary_wide",
+        priority=2,
+        modality="drug_sensitivity",
+        release_track="prism_primary",
+        release_label_override="PRISM Primary Repurposing DepMap Public 24Q2",
+    ),
+    "PRISMPrimaryRepurposingCompoundList": DatasetInfo(
+        filename="Repurposing_Public_24Q2_Extended_Primary_Compound_List.csv",
+        description=(
+            "Companion compound metadata for the PRISM primary repurposing matrix, "
+            "including source target strings and MOA labels."
+        ),
+        table_name="compounds",
+        priority=2,
+        modality="drug_sensitivity_metadata",
+        release_track="prism_primary",
+        release_label_override="PRISM Primary Repurposing DepMap Public 24Q2",
+    ),
+    "PRISMSecondaryDoseResponseCurveParameters": DatasetInfo(
+        filename="secondary-screen-dose-response-curve-parameters.csv",
+        description=(
+            "PRISM secondary repurposing dose-response curve parameters with auc, "
+            "ec50, ic50, fit terms, and compound metadata columns."
+        ),
+        table_name="drug_response_secondary",
+        priority=2,
+        modality="drug_sensitivity",
+        release_track="prism_secondary",
+        release_label_override="PRISM Secondary Repurposing 20Q2",
+    ),
     "OmicsSomaticMutations": DatasetInfo(
         filename="OmicsSomaticMutations.csv",
         description="Somatic mutations in cell lines",

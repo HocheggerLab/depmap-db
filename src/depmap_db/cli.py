@@ -22,6 +22,8 @@ from .etl.processors import (
     GeneProcessor,
     ModelProcessor,
     MutationsProcessor,
+    PrismPrimaryWideProcessor,
+    PrismSecondaryProcessor,
     ProteinExpressionMSWideProcessor,
 )
 from .etl.processors.base import BaseProcessor
@@ -54,6 +56,8 @@ def _get_processor(dataset_name: str) -> BaseProcessor | None:
         "Model": ModelProcessor,
         "OmicsSomaticMutations": MutationsProcessor,
         "ProteomicsMSGygi": ProteinExpressionMSWideProcessor,
+        "PRISMPrimaryRepurposingExtended": PrismPrimaryWideProcessor,
+        "PRISMSecondaryDoseResponseCurveParameters": PrismSecondaryProcessor,
     }
 
     processor_class = processors.get(dataset_name)
@@ -93,6 +97,10 @@ def _detect_dataset_from_filename(filename: str) -> str | None:
         return "ModelCondition"
     elif "harmonized_ms_ccle_gygi" in filename_lower:
         return "ProteomicsMSGygi"
+    elif "extended_primary_data_matrix" in filename_lower:
+        return "PRISMPrimaryRepurposingExtended"
+    elif "secondary-screen-dose-response-curve-parameters" in filename_lower:
+        return "PRISMSecondaryDoseResponseCurveParameters"
 
     return None
 

@@ -32,7 +32,7 @@ class TableSchema:
 class Schema:
     """Database schema management."""
 
-    CURRENT_VERSION = "1.3.0"
+    CURRENT_VERSION = "1.4.0"
 
     def __init__(self) -> None:
         self.db_manager = get_db_manager()
@@ -185,6 +185,96 @@ class Schema:
 
         self._add_table(
             TableSchema(
+                name="compounds",
+                table_type=TableType.METADATA,
+                dependencies=["schema_version"],
+                description=(
+                    "Compound-level PRISM metadata with explicit provenance and "
+                    "room for partial metadata coverage across PRISM releases"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS compounds (
+                broad_id VARCHAR PRIMARY KEY,
+                compound_name VARCHAR,
+                compound_synonyms TEXT,
+                moa TEXT,
+                target_text TEXT,
+                smiles TEXT,
+                phase VARCHAR,
+                primary_screen_id VARCHAR,
+                primary_dose_um DOUBLE,
+                secondary_screen_id VARCHAR,
+                secondary_row_name VARCHAR,
+                secondary_passed_str_profiling BOOLEAN,
+                disease_area VARCHAR,
+                indication TEXT,
+                source_dataset VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                release_label VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="drug_screens",
+                table_type=TableType.METADATA,
+                dependencies=["schema_version"],
+                description=(
+                    "PRISM screen/run metadata used to track release labels, release "
+                    "tracks, and the default summary metric for secondary analyses"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS drug_screens (
+                screen_id VARCHAR PRIMARY KEY,
+                screen_kind VARCHAR NOT NULL,
+                dataset_name VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                release_label VARCHAR,
+                release_track VARCHAR,
+                default_secondary_summary_metric VARCHAR,
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="compound_targets",
+                table_type=TableType.METADATA,
+                dependencies=["compounds", "genes"],
+                description=(
+                    "Many-to-many compound target bridge parsed from source target "
+                    "strings with optional resolution into the local genes table"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS compound_targets (
+                broad_id VARCHAR NOT NULL,
+                target_ordinal INTEGER NOT NULL,
+                target_symbol VARCHAR NOT NULL,
+                source_target_text TEXT,
+                source_dataset VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                local_gene_id VARCHAR,
+                local_hugo_symbol VARCHAR,
+                local_entrez_id INTEGER,
+                mapping_status VARCHAR NOT NULL,
+                mapping_method VARCHAR NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (broad_id, target_ordinal, source_dataset),
+                FOREIGN KEY (broad_id) REFERENCES compounds(broad_id),
+                FOREIGN KEY (local_gene_id) REFERENCES genes(gene_id)
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
                 name="gene_effects_wide",
                 table_type=TableType.CORE_DATA,
                 dependencies=["models"],
@@ -237,6 +327,71 @@ class Schema:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_id) REFERENCES models(model_id)
                 -- Protein accession columns are added dynamically during data loading
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="drug_response_primary_wide",
+                table_type=TableType.CORE_DATA,
+                dependencies=["compounds", "drug_screens"],
+                description=(
+                    "Canonical PRISM primary response matrix stored as published in "
+                    "compound-by-model wide orientation"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS drug_response_primary_wide (
+                broad_id VARCHAR PRIMARY KEY,
+                screen_id VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (broad_id) REFERENCES compounds(broad_id),
+                FOREIGN KEY (screen_id) REFERENCES drug_screens(screen_id)
+                -- Model columns are added dynamically during data loading
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="drug_response_secondary",
+                table_type=TableType.CORE_DATA,
+                dependencies=["compounds", "models", "drug_screens"],
+                description=(
+                    "Canonical PRISM secondary long table with auc/ec50/ic50 and "
+                    "dose-response fit terms"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS drug_response_secondary (
+                response_id VARCHAR PRIMARY KEY,
+                broad_id VARCHAR NOT NULL,
+                model_id VARCHAR NOT NULL,
+                ccle_name VARCHAR,
+                screen_id VARCHAR,
+                upper_limit DOUBLE,
+                lower_limit DOUBLE,
+                slope DOUBLE,
+                r2 DOUBLE,
+                auc DOUBLE,
+                ec50 DOUBLE,
+                ic50 DOUBLE,
+                passed_str_profiling BOOLEAN,
+                row_name VARCHAR,
+                compound_name VARCHAR,
+                moa TEXT,
+                target_text TEXT,
+                disease_area VARCHAR,
+                indication TEXT,
+                smiles TEXT,
+                phase VARCHAR,
+                source_dataset VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (broad_id) REFERENCES compounds(broad_id),
+                FOREIGN KEY (model_id) REFERENCES models(model_id),
+                FOREIGN KEY (screen_id) REFERENCES drug_screens(screen_id)
             )
             """,
             )

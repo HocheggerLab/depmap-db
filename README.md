@@ -10,6 +10,8 @@ The repository treats datasets according to their natural structure:
 - **Gene expression** → canonical table: `gene_expression_wide` (wide matrix)
 - **Somatic mutations** → canonical table: `mutations` (long event table) + derived `model_gene_mutation_status` (sparse)
 - **Proteomics (Gygi MS)** → canonical table: `protein_expression_ms_wide` (wide matrix) + `protein_features` UniProt→gene bridge
+- **PRISM primary repurposing** → canonical table: `drug_response_primary_wide` (compound × model wide matrix, stored as published) + `compounds` + `compound_targets`
+- **PRISM secondary repurposing** → canonical table: `drug_response_secondary` (long dose-response table with AUC/EC50/IC50 + fit terms) + `compounds` + `compound_targets` + `drug_screens`
 
 ### Why wide is canonical for dependency/expression/proteomics
 
@@ -23,6 +25,18 @@ For proteomics, the initial implementation targets the **DepMap Harmonized MS CC
 The file is stored as-published. DepMap labels it as *harmonized*, but this repo does **not** claim a more specific normalization meaning unless DepMap documents that clearly in the source release.
 
 Long-format projections can still be added later as **derived views or exports** if a concrete use-case needs them, but the database now has one primary storage model for both matrix datasets.
+
+### Why PRISM phase-1 uses both wide and long tables
+
+PRISM is different enough from CRISPR/expression/proteomics that phase 1 uses the published structure of each release rather than forcing everything into one drug-response abstraction immediately.
+
+- **Primary repurposing matrix (`Repurposing_Public_24Q2_Extended_Primary_Data_Matrix.csv`)** is stored in `drug_response_primary_wide` in the same **compound-by-model** orientation DepMap publishes.
+- **Secondary dose-response parameters (`secondary-screen-dose-response-curve-parameters.csv`)** are stored canonically in `drug_response_secondary` as a long table.
+- **Compound metadata** lives in `compounds`.
+- **Compound→gene links** live in `compound_targets` and are explicitly provenance-aware. A row in `compound_targets` means the source metadata named that target token; it does **not** claim biochemical certainty or exclusivity.
+- **Screen metadata / release semantics** live in `drug_screens`, which lets PRISM sit on its own release tracks (`prism_primary`, `prism_secondary`) rather than pretending it always matches the core DepMap quarterly release.
+
+For secondary-screen analyses, this repo keeps multiple response measures but recommends **AUC** as the default summary metric in phase 1 because it is usually more stable than leaning on a single fitted concentration summary alone. EC50, IC50, slope, upper/lower limits, and fit quality are still preserved.
 
 ### Why long is canonical for mutations
 
@@ -64,6 +78,23 @@ depmap-db download --datasets Model --datasets Gene --load-data
 
 ```bash
 depmap-db load-folder --folder /path/to/depmap/csvs
+```
+
+### Load PRISM phase-1 datasets
+
+```bash
+# download the primary matrix + secondary dose-response table
+# release labels are tracked explicitly per PRISM dataset
+
+depmap-db download \
+  --datasets PRISMPrimaryRepurposingExtended \
+  --datasets PRISMSecondaryDoseResponseCurveParameters
+
+# load a local folder that contains the PRISM files
+# if the primary compound list sits next to the primary matrix,
+# it will also be used to populate compound metadata + source target strings
+
+depmap-db load-folder --folder /path/to/depmap/prism/files
 ```
 
 ### Gene-level query helpers
