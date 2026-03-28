@@ -235,6 +235,10 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             }
         )
 
+        alias_lookup, uniprot_lookup = self._build_local_gene_lookups(local_genes)
+        self._resolve_local_genes_from_aliases(bridge_df, alias_lookup)
+        self._resolve_local_genes_from_uniprot_ids(bridge_df, uniprot_lookup)
+
         unresolved_mask = bridge_df["local_gene_id"].isna() & bridge_df["entrez_id"].notna()
         if unresolved_mask.any():
             local_by_entrez = local_genes.dropna(subset=["entrez_id"]).drop_duplicates(
@@ -297,6 +301,145 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             ]
         ].sort_values("protein_accession")
         return bridge_df
+
+    def _build_local_gene_lookups(
+        self, local_genes: pd.DataFrame
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        gene_cache_path = self.settings.depmap.cache_dir / "Gene.csv"
+        if not gene_cache_path.exists():
+            return {}, {}
+
+        gene_metadata = pd.read_csv(
+            gene_cache_path,
+            low_memory=False,
+            usecols=["symbol", "alias_symbol", "prev_symbol", "uniprot_ids"],
+        )
+        if gene_metadata.empty:
+            return {}, {}
+
+        gene_metadata = gene_metadata.rename(columns={"symbol": "hugo_symbol"})
+        gene_metadata = gene_metadata.dropna(subset=["hugo_symbol"])
+        gene_metadata["hugo_symbol"] = gene_metadata["hugo_symbol"].astype(str)
+
+        local_lookup = local_genes[["gene_id", "hugo_symbol", "entrez_id", "ensembl_id"]].copy()
+        local_lookup["hugo_symbol"] = local_lookup["hugo_symbol"].astype(str)
+        merged = gene_metadata.merge(local_lookup, on="hugo_symbol", how="inner")
+        if merged.empty:
+            return {}, {}
+
+        alias_rows: list[dict[str, Any]] = []
+        uniprot_rows: list[dict[str, Any]] = []
+        for _, row in merged.iterrows():
+            payload = {
+                "local_gene_id": row["gene_id"],
+                "local_hugo_symbol": row["hugo_symbol"],
+                "local_entrez_id": row["entrez_id"],
+                "local_ensembl_id": row["ensembl_id"],
+            }
+            for column in ["alias_symbol", "prev_symbol"]:
+                for token in self._split_lookup_tokens(row.get(column), delimiter="|"):
+                    alias_rows.append({"lookup_key": token.lower(), **payload})
+            for accession in self._split_lookup_tokens(row.get("uniprot_ids"), delimiter="|"):
+                uniprot_rows.append({"lookup_key": accession, **payload})
+
+        return self._build_unique_lookup(alias_rows), self._build_unique_lookup(uniprot_rows)
+
+    def _resolve_local_genes_from_aliases(
+        self, bridge_df: pd.DataFrame, alias_lookup: dict[str, dict[str, Any]]
+    ) -> None:
+        if not alias_lookup:
+            return
+
+        unresolved_indices = bridge_df.index[
+            bridge_df["local_gene_id"].isna() & bridge_df["gene_symbol"].notna()
+        ]
+        for idx in unresolved_indices:
+            matches = {
+                match["local_gene_id"]: match
+                for token in self._split_lookup_tokens(
+                    bridge_df.at[idx, "gene_symbol"], delimiter=";"
+                )
+                if (match := alias_lookup.get(token.lower())) is not None
+            }
+            if len(matches) != 1:
+                continue
+            self._apply_local_gene_match(
+                bridge_df,
+                idx,
+                next(iter(matches.values())),
+                method_suffix="gene_symbol_alias_lookup",
+            )
+
+    def _resolve_local_genes_from_uniprot_ids(
+        self, bridge_df: pd.DataFrame, uniprot_lookup: dict[str, dict[str, Any]]
+    ) -> None:
+        if not uniprot_lookup:
+            return
+
+        unresolved_indices = bridge_df.index[bridge_df["local_gene_id"].isna()]
+        for idx in unresolved_indices:
+            accession = bridge_df.at[idx, "protein_accession_base"]
+            if pd.isna(accession):
+                continue
+            match = uniprot_lookup.get(str(accession))
+            if match is None:
+                continue
+            self._apply_local_gene_match(
+                bridge_df,
+                idx,
+                match,
+                method_suffix="uniprot_id_lookup",
+            )
+
+    def _apply_local_gene_match(
+        self,
+        bridge_df: pd.DataFrame,
+        idx: Any,
+        match: dict[str, Any],
+        *,
+        method_suffix: str,
+    ) -> None:
+        bridge_df.at[idx, "local_gene_id"] = match["local_gene_id"]
+        bridge_df.at[idx, "local_hugo_symbol"] = match["local_hugo_symbol"]
+        bridge_df.at[idx, "local_entrez_id"] = match["local_entrez_id"]
+        bridge_df.at[idx, "local_ensembl_id"] = match["local_ensembl_id"]
+        bridge_df.at[idx, "mapping_method"] = self._append_mapping_method(
+            bridge_df.at[idx, "mapping_method"], method_suffix
+        )
+
+    def _build_unique_lookup(
+        self, rows: list[dict[str, Any]]
+    ) -> dict[str, dict[str, Any]]:
+        if not rows:
+            return {}
+
+        lookup_df = pd.DataFrame(rows).drop_duplicates()
+        unique_keys = (
+            lookup_df.groupby("lookup_key")["local_gene_id"]
+            .nunique()
+            .loc[lambda counts: counts == 1]
+            .index
+        )
+        filtered = lookup_df[lookup_df["lookup_key"].isin(unique_keys)]
+        filtered = filtered.drop_duplicates(subset=["lookup_key"], keep="first")
+        return filtered.set_index("lookup_key").to_dict(orient="index")
+
+    def _split_lookup_tokens(self, value: Any, *, delimiter: str) -> list[str]:
+        if value is None or pd.isna(value):
+            return []
+        return [
+            token.strip()
+            for token in str(value).split(delimiter)
+            if token and token.strip()
+        ]
+
+    def _append_mapping_method(self, current: Any, suffix: str) -> str:
+        if current is None or pd.isna(current) or str(current).strip() == "":
+            return suffix
+        current_text = str(current)
+        if suffix in current_text.split("+"):
+            return current_text
+        return f"{current_text}+{suffix}"
 
     def _replace_protein_features(self, bridge_df: pd.DataFrame) -> None:
         self.db_manager.execute(
