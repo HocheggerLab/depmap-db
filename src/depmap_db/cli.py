@@ -15,6 +15,7 @@ from .config import get_logger, get_settings, reload_settings
 from .database import create_tables, get_current_schema_version, get_db_manager
 from .database.connection import reset_db_manager
 from .database.queries import get_available_views
+from .database.schema import Schema
 from .downloader import FileManager, RefreshPlanner, ReleaseTracker
 from .etl.processors import (
     GeneEffectWideProcessor,
@@ -36,6 +37,7 @@ from .query import (
     SummaryGrouping,
 )
 from .utils.constants import (
+    DEPMAP_FILES,
     PHASE_1_DATASETS,
     SUPPORTED_DATASETS,
 )
@@ -146,7 +148,20 @@ def _load_downloaded_files(
         )
         return
 
-    for dataset_name, file_path in downloaded_files.items():
+    # Sort datasets so that dependency tables (e.g. compounds) load before
+    # tables that reference them (e.g. drug_response_primary_wide).
+    schema = Schema()
+    table_order = schema.get_creation_order()
+
+    def _load_order(item: tuple[str, Path]) -> int:
+        dataset_name = item[0]
+        info = DEPMAP_FILES.get(dataset_name)
+        if info and info.table_name in table_order:
+            return table_order.index(info.table_name)
+        return len(table_order)
+
+    sorted_datasets = sorted(downloaded_files.items(), key=_load_order)
+    for dataset_name, file_path in sorted_datasets:
         processor = _get_processor(dataset_name)
         if not processor:
             console.print(
@@ -726,7 +741,9 @@ def load_folder(folder: Path, force: bool, pattern: str) -> None:
     help="Apply the refresh plan instead of only showing it",
 )
 @click.option(
-    "--force", is_flag=True, help="Force reload into the database when applying"
+    "--force",
+    is_flag=True,
+    help="Force reload into the database when applying",
 )
 @click.option(
     "--load-data",
@@ -778,9 +795,7 @@ def refresh(
         downloaded_files = download_datasets_sync(
             plan.datasets_to_download, cache_dir
         )
-        download_sources = get_download_sources_sync(
-            plan.datasets_to_download
-        )
+        download_sources = get_download_sources_sync(plan.datasets_to_download)
 
         for dataset_name, file_path in downloaded_files.items():
             source_url = download_sources[dataset_name].url
@@ -1120,7 +1135,10 @@ def gene() -> None:
 )
 @handle_exceptions
 def gene_dependency_summary(
-    gene_symbol: str, group_by: SummaryGrouping, limit: int, output_format: QueryFormat
+    gene_symbol: str,
+    group_by: SummaryGrouping,
+    limit: int,
+    output_format: QueryFormat,
 ) -> None:
     """Summarize dependency for a gene across cancer groups."""
     if not _require_initialized_database():
@@ -1214,7 +1232,10 @@ def gene_dependency_models(
 )
 @handle_exceptions
 def gene_expression_summary(
-    gene_symbol: str, group_by: SummaryGrouping, limit: int, output_format: QueryFormat
+    gene_symbol: str,
+    group_by: SummaryGrouping,
+    limit: int,
+    output_format: QueryFormat,
 ) -> None:
     """Summarize expression for a gene across cancer groups."""
     if not _require_initialized_database():
@@ -1233,7 +1254,11 @@ def gene_expression_summary(
 
 @gene.command("dependency-by-mutation")
 @click.argument("gene_symbol")
-@click.option("--mutation-gene", required=True, help="Gene used to define mutant vs WT cohorts.")
+@click.option(
+    "--mutation-gene",
+    required=True,
+    help="Gene used to define mutant vs WT cohorts.",
+)
 @click.option(
     "--mutation-class",
     type=click.Choice(["any", "likely_lof", "hotspot", "driver"]),
@@ -1286,9 +1311,17 @@ def model() -> None:
 @model.command("mutations")
 @click.argument("cell_line")
 @click.option("--gene", help="Filter to a single mutated gene.")
-@click.option("--lof-only", is_flag=True, help="Only include likely loss-of-function events.")
-@click.option("--hotspot-only", is_flag=True, help="Only include hotspot events.")
-@click.option("--driver-only", is_flag=True, help="Only include Hess-driver events.")
+@click.option(
+    "--lof-only",
+    is_flag=True,
+    help="Only include likely loss-of-function events.",
+)
+@click.option(
+    "--hotspot-only", is_flag=True, help="Only include hotspot events."
+)
+@click.option(
+    "--driver-only", is_flag=True, help="Only include Hess-driver events."
+)
 @click.option("--limit", type=int, help="Optional row limit.")
 @click.option(
     "--format",
@@ -1387,7 +1420,11 @@ def protein_mapping_summary(output_format: QueryFormat) -> None:
 
 @protein.command("search")
 @click.argument("term")
-@click.option("--mapped-only", is_flag=True, help="Only show proteins mapped to local genes.")
+@click.option(
+    "--mapped-only",
+    is_flag=True,
+    help="Only show proteins mapped to local genes.",
+)
 @click.option("--limit", type=int, default=20, show_default=True)
 @click.option(
     "--format",

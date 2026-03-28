@@ -72,10 +72,58 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
                 source_dataset=self.DATASET_NAME,
                 source_filename=self.dataset_info.filename,
             )
-            self._replace_compound_targets(target_df, source_dataset=self.DATASET_NAME)
+            self._replace_compound_targets(
+                target_df, source_dataset=self.DATASET_NAME
+            )
 
             df_insert = self._build_secondary_response_dataframe(df)
-            with NamedTemporaryFile(suffix=".parquet", delete=False) as temp_file:
+
+            # Backfill stub model rows for model_ids not in current models table.
+            response_model_ids = set(
+                df_insert["model_id"].dropna().astype(str).unique()
+            )
+            existing_model_rows = self.db_manager.execute(
+                "SELECT model_id FROM models"
+            ).fetchall()
+            existing_model_ids = {row[0] for row in existing_model_rows}
+            missing_model_ids = response_model_ids - existing_model_ids
+            if missing_model_ids:
+                warnings.append(
+                    f"Backfilling {len(missing_model_ids)} stub model rows from PRISM secondary data"
+                )
+                for mid in missing_model_ids:
+                    self.db_manager.execute(
+                        "INSERT INTO models (model_id, cell_line_name) VALUES (?, ?)",
+                        [mid, mid],
+                    )
+
+            # Backfill stub compound rows for broad_ids not in compounds table.
+            response_broad_ids = set(
+                df_insert["broad_id"].dropna().astype(str).unique()
+            )
+            existing_compound_rows = self.db_manager.execute(
+                "SELECT broad_id FROM compounds"
+            ).fetchall()
+            existing_compound_ids = {row[0] for row in existing_compound_rows}
+            missing_broad_ids = response_broad_ids - existing_compound_ids
+            if missing_broad_ids:
+                warnings.append(
+                    f"Backfilling {len(missing_broad_ids)} stub compound rows from PRISM secondary data"
+                )
+                for bid in missing_broad_ids:
+                    self.db_manager.execute(
+                        "INSERT INTO compounds (broad_id, source_dataset, source_filename, release_label) VALUES (?, ?, ?, ?)",
+                        [
+                            bid,
+                            self.DATASET_NAME,
+                            self.dataset_info.filename,
+                            self.dataset_info.release_label_override,
+                        ],
+                    )
+
+            with NamedTemporaryFile(
+                suffix=".parquet", delete=False
+            ) as temp_file:
                 temp_path = Path(temp_file.name)
             try:
                 df_insert.to_parquet(temp_path, index=False)
@@ -154,10 +202,12 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
         compounds_df["primary_dose_um"] = None
         compounds_df["source_dataset"] = self.DATASET_NAME
         compounds_df["source_filename"] = self.dataset_info.filename
-        compounds_df["release_label"] = self.dataset_info.release_label_override
-        compounds_df = compounds_df.dropna(subset=["broad_id"]).drop_duplicates(
-            subset=["broad_id"], keep="first"
+        compounds_df["release_label"] = (
+            self.dataset_info.release_label_override
         )
+        compounds_df = compounds_df.dropna(
+            subset=["broad_id"]
+        ).drop_duplicates(subset=["broad_id"], keep="first")
         return compounds_df[
             [
                 "broad_id",
@@ -180,8 +230,10 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
             ]
         ]
 
-    def _build_secondary_response_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        clean = df.copy()
+    def _build_secondary_response_dataframe(
+        self, df: pd.DataFrame
+    ) -> pd.DataFrame:
+        clean = df.dropna(subset=["depmap_id", "broad_id"]).copy()
         clean["response_id"] = (
             clean["broad_id"].astype(str)
             + "::"
@@ -189,6 +241,7 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
             + "::"
             + clean["screen_id"].astype(str)
         )
+        clean = clean.drop_duplicates(subset=["response_id"], keep="first")
         clean = clean.rename(
             columns={
                 "depmap_id": "model_id",
@@ -231,8 +284,13 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
         return clean[ordered]
 
     def _ensure_screen_rows(self, df: pd.DataFrame) -> None:
-        release_label = self.dataset_info.release_label_override or self.settings.depmap.release_label
-        screens = sorted(df["screen_id"].dropna().astype(str).unique().tolist())
+        release_label = (
+            self.dataset_info.release_label_override
+            or self.settings.depmap.release_label
+        )
+        screens = sorted(
+            df["screen_id"].dropna().astype(str).unique().tolist()
+        )
         for screen_id in screens:
             self.db_manager.execute(
                 "DELETE FROM drug_screens WHERE screen_id = ?",

@@ -42,7 +42,9 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
         if df.empty:
             raise ValueError("Proteomics MS file is empty")
         if len(df.columns) < 2:
-            raise ValueError("Proteomics MS file must contain model and protein columns")
+            raise ValueError(
+                "Proteomics MS file must contain model and protein columns"
+            )
 
         model_column = df.columns[0]
         missing_model_ids = df[model_column].isna().sum()
@@ -84,12 +86,20 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             self._replace_protein_features(bridge_df)
 
             self.create_wide_table_schema(protein_accessions)
-            df_insert = df.rename(columns={model_column: "model_id", **self.column_mapping}).copy()
+            df_insert = df.rename(
+                columns={model_column: "model_id", **self.column_mapping}
+            ).copy()
             df_insert["created_at"] = pd.Timestamp.now()
-            ordered_columns = ["model_id", "created_at", *self.column_mapping.values()]
+            ordered_columns = [
+                "model_id",
+                "created_at",
+                *self.column_mapping.values(),
+            ]
             df_insert = df_insert[ordered_columns]
 
-            with NamedTemporaryFile(suffix=".parquet", delete=False) as temp_file:
+            with NamedTemporaryFile(
+                suffix=".parquet", delete=False
+            ) as temp_file:
                 temp_path = Path(temp_file.name)
             try:
                 df_insert.to_parquet(temp_path, index=False)
@@ -199,14 +209,15 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             cache_name="harmonized_MS_CCLE_Gygi_uniprot_bridge",
             force_refresh=force_refresh,
         )
-        mapping_df["storage_column_name"] = mapping_df["protein_accession"].map(
-            self._sanitize_column_name
-        )
+        mapping_df["storage_column_name"] = mapping_df[
+            "protein_accession"
+        ].map(self._sanitize_column_name)
         mapping_df["source_dataset"] = self.DATASET_NAME
         mapping_df["source_filename"] = self.dataset_info.filename
         mapping_df["modality"] = self.dataset_info.modality
         mapping_df["release_label"] = (
-            self.dataset_info.release_label_override or self.settings.depmap.release_label
+            self.dataset_info.release_label_override
+            or self.settings.depmap.release_label
         )
 
         local_genes = self.db_manager.fetch_df(
@@ -216,12 +227,26 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             """
         )
         local_by_symbol = local_genes.copy()
-        local_by_symbol["symbol_key"] = local_by_symbol["hugo_symbol"].astype(str).str.lower()
-        local_by_symbol = local_by_symbol.drop_duplicates(subset=["symbol_key"], keep="first")
+        local_by_symbol["symbol_key"] = (
+            local_by_symbol["hugo_symbol"].astype(str).str.lower()
+        )
+        local_by_symbol = local_by_symbol.drop_duplicates(
+            subset=["symbol_key"], keep="first"
+        )
 
-        mapping_df["gene_symbol_key"] = mapping_df["gene_symbol"].astype(str).str.lower()
+        mapping_df["gene_symbol_key"] = (
+            mapping_df["gene_symbol"].astype(str).str.lower()
+        )
         bridge_df = mapping_df.merge(
-            local_by_symbol[["symbol_key", "gene_id", "hugo_symbol", "entrez_id", "ensembl_id"]],
+            local_by_symbol[
+                [
+                    "symbol_key",
+                    "gene_id",
+                    "hugo_symbol",
+                    "entrez_id",
+                    "ensembl_id",
+                ]
+            ],
             left_on="gene_symbol_key",
             right_on="symbol_key",
             how="left",
@@ -235,18 +260,28 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             }
         )
 
-        alias_lookup, uniprot_lookup = self._build_local_gene_lookups(local_genes)
+        alias_lookup, uniprot_lookup = self._build_local_gene_lookups(
+            local_genes
+        )
         self._resolve_local_genes_from_aliases(bridge_df, alias_lookup)
         self._resolve_local_genes_from_uniprot_ids(bridge_df, uniprot_lookup)
 
-        unresolved_mask = bridge_df["local_gene_id"].isna() & bridge_df["entrez_id"].notna()
+        unresolved_mask = (
+            bridge_df["local_gene_id"].isna() & bridge_df["entrez_id"].notna()
+        )
         if unresolved_mask.any():
-            local_by_entrez = local_genes.dropna(subset=["entrez_id"]).drop_duplicates(
+            local_by_entrez = local_genes.dropna(
+                subset=["entrez_id"]
+            ).drop_duplicates(
                 subset=["entrez_id"],
                 keep="first",
             )
-            entrez_matches = bridge_df.loc[unresolved_mask, ["protein_accession", "entrez_id"]].merge(
-                local_by_entrez[["entrez_id", "gene_id", "hugo_symbol", "ensembl_id"]],
+            entrez_matches = bridge_df.loc[
+                unresolved_mask, ["protein_accession", "entrez_id"]
+            ].merge(
+                local_by_entrez[
+                    ["entrez_id", "gene_id", "hugo_symbol", "ensembl_id"]
+                ],
                 on="entrez_id",
                 how="left",
             )
@@ -268,15 +303,19 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             ] = "entrez_fallback"
 
         bridge_df.loc[
-            bridge_df["mapping_status"].eq("mapped") & bridge_df["local_gene_id"].notna(),
+            bridge_df["mapping_status"].eq("mapped")
+            & bridge_df["local_gene_id"].notna(),
             "mapping_status",
         ] = "mapped_to_local_gene"
         bridge_df.loc[
-            bridge_df["mapping_status"].eq("mapped") & bridge_df["local_gene_id"].isna(),
+            bridge_df["mapping_status"].eq("mapped")
+            & bridge_df["local_gene_id"].isna(),
             "mapping_status",
         ] = "mapped_to_uniprot_only"
 
-        bridge_df = bridge_df.drop(columns=["gene_symbol_key", "symbol_key"], errors="ignore")
+        bridge_df = bridge_df.drop(
+            columns=["gene_symbol_key", "symbol_key"], errors="ignore"
+        )
         bridge_df = bridge_df[
             [
                 "protein_accession",
@@ -321,9 +360,13 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
         gene_metadata = gene_metadata.dropna(subset=["hugo_symbol"])
         gene_metadata["hugo_symbol"] = gene_metadata["hugo_symbol"].astype(str)
 
-        local_lookup = local_genes[["gene_id", "hugo_symbol", "entrez_id", "ensembl_id"]].copy()
+        local_lookup = local_genes[
+            ["gene_id", "hugo_symbol", "entrez_id", "ensembl_id"]
+        ].copy()
         local_lookup["hugo_symbol"] = local_lookup["hugo_symbol"].astype(str)
-        merged = gene_metadata.merge(local_lookup, on="hugo_symbol", how="inner")
+        merged = gene_metadata.merge(
+            local_lookup, on="hugo_symbol", how="inner"
+        )
         if merged.empty:
             return {}, {}
 
@@ -337,12 +380,18 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
                 "local_ensembl_id": row["ensembl_id"],
             }
             for column in ["alias_symbol", "prev_symbol"]:
-                for token in self._split_lookup_tokens(row.get(column), delimiter="|"):
+                for token in self._split_lookup_tokens(
+                    row.get(column), delimiter="|"
+                ):
                     alias_rows.append({"lookup_key": token.lower(), **payload})
-            for accession in self._split_lookup_tokens(row.get("uniprot_ids"), delimiter="|"):
+            for accession in self._split_lookup_tokens(
+                row.get("uniprot_ids"), delimiter="|"
+            ):
                 uniprot_rows.append({"lookup_key": accession, **payload})
 
-        return self._build_unique_lookup(alias_rows), self._build_unique_lookup(uniprot_rows)
+        return self._build_unique_lookup(
+            alias_rows
+        ), self._build_unique_lookup(uniprot_rows)
 
     def _resolve_local_genes_from_aliases(
         self, bridge_df: pd.DataFrame, alias_lookup: dict[str, dict[str, Any]]
@@ -351,7 +400,8 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             return
 
         unresolved_indices = bridge_df.index[
-            bridge_df["local_gene_id"].isna() & bridge_df["gene_symbol"].notna()
+            bridge_df["local_gene_id"].isna()
+            & bridge_df["gene_symbol"].notna()
         ]
         for idx in unresolved_indices:
             matches = {
@@ -371,7 +421,9 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             )
 
     def _resolve_local_genes_from_uniprot_ids(
-        self, bridge_df: pd.DataFrame, uniprot_lookup: dict[str, dict[str, Any]]
+        self,
+        bridge_df: pd.DataFrame,
+        uniprot_lookup: dict[str, dict[str, Any]],
     ) -> None:
         if not uniprot_lookup:
             return
@@ -421,8 +473,13 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             .index
         )
         filtered = lookup_df[lookup_df["lookup_key"].isin(unique_keys)]
-        filtered = filtered.drop_duplicates(subset=["lookup_key"], keep="first")
-        return filtered.set_index("lookup_key").to_dict(orient="index")
+        filtered = filtered.drop_duplicates(
+            subset=["lookup_key"], keep="first"
+        )
+        result: dict[str, dict[str, Any]] = filtered.set_index(
+            "lookup_key"
+        ).to_dict(orient="index")
+        return result
 
     def _split_lookup_tokens(self, value: Any, *, delimiter: str) -> list[str]:
         if value is None or pd.isna(value):
@@ -480,7 +537,9 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
             f"DESCRIBE {self.TABLE_NAME}"
         ).fetchall()
         protein_columns = [
-            column[0] for column in columns if column[0] not in {"model_id", "created_at"}
+            column[0]
+            for column in columns
+            if column[0] not in {"model_id", "created_at"}
         ]
         bridge_counts = self.db_manager.execute(
             """
@@ -496,7 +555,11 @@ class ProteinExpressionMSWideProcessor(BaseProcessor):
         return {
             "total_models": model_count,
             "total_proteins": len(protein_columns),
-            "mapped_gene_symbols": int(bridge_counts[1]) if bridge_counts else 0,
-            "mapped_local_genes": int(bridge_counts[2]) if bridge_counts else 0,
+            "mapped_gene_symbols": int(bridge_counts[1])
+            if bridge_counts
+            else 0,
+            "mapped_local_genes": int(bridge_counts[2])
+            if bridge_counts
+            else 0,
             "table_format": "wide",
         }

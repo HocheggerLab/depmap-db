@@ -49,4 +49,5 @@ repos:
     rev: v2.4.1
     hooks:
         - id: codespell
-          args: ["--write-changes", "--ignore-words-list", "hart,hel"]
+          args: ["--write-changes", "--ignore-words-list", "hart,hel,te,nd"]
+          exclude: '\.ipynb$'

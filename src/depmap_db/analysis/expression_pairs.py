@@ -35,36 +35,36 @@ HIGHLIGHT_TARGETS: Final[tuple[HighlightTarget, ...]] = (
         plot_label="HeLa",
         aliases=("ACH-001086", "HeLa", "HELA_CERVIX"),
     ),
-    HighlightTarget(
-        label="RPE1-ss111",
-        plot_label="ss111",
-        aliases=("ACH-002466", "RPE1-ss111", "RPE1SS111_ENGINEERED"),
-    ),
-    HighlightTarget(
-        label="RPE1-ss119",
-        plot_label="ss119",
-        aliases=("ACH-002465", "RPE1-ss119", "RPE1SS119_ENGINEERED"),
-    ),
-    HighlightTarget(
-        label="RPE1-ss77",
-        plot_label="ss77",
-        aliases=("ACH-002463", "RPE1-ss77", "RPE1SS77_ENGINEERED"),
-    ),
-    HighlightTarget(
-        label="RPE1-ss51",
-        plot_label="ss51",
-        aliases=("ACH-002467", "RPE1-ss51", "RPE1SS51_ENGINEERED"),
-    ),
+    # HighlightTarget(
+    #     label="RPE1-ss111",
+    #     plot_label="ss111",
+    #     aliases=("ACH-002466", "RPE1-ss111", "RPE1SS111_ENGINEERED"),
+    # ),
+    # HighlightTarget(
+    #     label="RPE1-ss119",
+    #     plot_label="ss119",
+    #     aliases=("ACH-002465", "RPE1-ss119", "RPE1SS119_ENGINEERED"),
+    # ),
+    # HighlightTarget(
+    #     label="RPE1-ss77",
+    #     plot_label="ss77",
+    #     aliases=("ACH-002463", "RPE1-ss77", "RPE1SS77_ENGINEERED"),
+    # ),
+    # HighlightTarget(
+    #     label="RPE1-ss51",
+    #     plot_label="ss51",
+    #     aliases=("ACH-002467", "RPE1-ss51", "RPE1SS51_ENGINEERED"),
+    # ),
     HighlightTarget(
         label="RPE1-ss48",
         plot_label="ss48",
         aliases=("ACH-002462", "RPE1-ss48", "RPE1SS48_ENGINEERED"),
     ),
-    HighlightTarget(
-        label="RPE1-ss6",
-        plot_label="ss6",
-        aliases=("ACH-002464", "RPE1-ss6", "RPE1SS6_ENGINEERED"),
-    ),
+    # HighlightTarget(
+    #     label="RPE1-ss6",
+    #     plot_label="ss6",
+    #     aliases=("ACH-002464", "RPE1-ss6", "RPE1SS6_ENGINEERED"),
+    # ),
 )
 
 MODEL_NAME_COLUMNS: Final[tuple[str, ...]] = (
@@ -119,7 +119,9 @@ def build_expression_dataset(
     )
 
 
-def pairwise_frame(data: pl.DataFrame, x_gene: str, y_gene: str) -> pl.DataFrame:
+def pairwise_frame(
+    data: pl.DataFrame, x_gene: str, y_gene: str
+) -> pl.DataFrame:
     """Prepare one pairwise comparison with TCGA-style colour metric."""
     return (
         data.select(
@@ -138,7 +140,9 @@ def pairwise_frame(data: pl.DataFrame, x_gene: str, y_gene: str) -> pl.DataFrame
         .with_columns(
             pl.when((pl.col("x") + pl.col("y")) == 0)
             .then(None)
-            .otherwise((pl.col("x") - pl.col("y")) / (pl.col("x") + pl.col("y")))
+            .otherwise(
+                (pl.col("x") - pl.col("y")) / (pl.col("x") + pl.col("y"))
+            )
             .alias("diff")
         )
     )
@@ -154,12 +158,18 @@ def exact_model_matches(
     target: str | HighlightTarget,
 ) -> pl.DataFrame:
     """Return exact-ish matches after punctuation-insensitive normalisation."""
-    normalised_targets = {_normalise_label(alias) for alias in _target_aliases(target)}
+    normalised_targets = {
+        _normalise_label(alias) for alias in _target_aliases(target)
+    }
     match_expr = pl.lit(False)
     for column in MODEL_MATCH_COLUMNS:
-        normalised_column = pl.col(column).fill_null("").map_elements(
-            _normalise_label,
-            return_dtype=pl.String,
+        normalised_column = (
+            pl.col(column)
+            .fill_null("")
+            .map_elements(
+                _normalise_label,
+                return_dtype=pl.String,
+            )
         )
         for normalised_target in normalised_targets:
             match_expr = match_expr | (normalised_column == normalised_target)
@@ -215,12 +225,20 @@ def nearest_model_candidates(
             if raw_name is None:
                 continue
             candidate_token = _normalise_label(str(raw_name))
-            if target_token in candidate_token or candidate_token in target_token:
+            if (
+                target_token in candidate_token
+                or candidate_token in target_token
+            ):
                 token_matches.append(row)
                 break
 
     if token_matches:
-        return pl.DataFrame(token_matches).unique().sort("cell_line_name").head(limit)
+        return (
+            pl.DataFrame(token_matches)
+            .unique()
+            .sort("cell_line_name")
+            .head(limit)
+        )
 
     names: dict[str, dict[str, object]] = {}
     for row in records:
@@ -259,7 +277,11 @@ def build_highlight_table(
         matches = exact_model_matches(data, target)
         if matches.height == 0:
             continue
-        frames.append(matches.with_columns(pl.lit(target.label).alias("highlight_target")))
+        frames.append(
+            matches.with_columns(
+                pl.lit(target.label).alias("highlight_target")
+            )
+        )
 
     if not frames:
         return pl.DataFrame(

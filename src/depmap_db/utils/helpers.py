@@ -132,6 +132,9 @@ def is_valid_depmap_file(filename: str) -> bool:
         "Proteomics",
         "Harmonized",
         "Gygi",
+        "Repurposing",
+        "secondary-screen",
+        "dose-response",
     ]
 
     filename_upper = filename.upper()

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from ...config import get_settings
+
+if TYPE_CHECKING:
+    from ...database.connection import DatabaseManager
 
 
 @dataclass
@@ -31,11 +34,11 @@ class CompoundTargetResolution:
 class PrismCompoundMixin:
     """Helpers for compound metadata upsert and target parsing/resolution.
 
-    Phase 1 keeps this intentionally conservative:
-    - parse target strings as source assertions, not truth
-    - allow compounds with no resolved local genes
-    - only resolve to local genes when the mapping is unique and defensible
+    This mixin is designed to be used alongside :class:`BaseProcessor`, which
+    provides the ``db_manager`` attribute at runtime.
     """
+
+    db_manager: DatabaseManager
 
     @property
     def _gene_cache_path(self) -> Path:
@@ -93,8 +96,12 @@ class PrismCompoundMixin:
             gene_metadata = gene_metadata.dropna(subset=["symbol"]).copy()
             gene_metadata["symbol"] = gene_metadata["symbol"].astype(str)
 
-            local_lookup = local_genes[["gene_id", "hugo_symbol", "entrez_id"]].copy()
-            local_lookup["hugo_symbol"] = local_lookup["hugo_symbol"].astype(str)
+            local_lookup = local_genes[
+                ["gene_id", "hugo_symbol", "entrez_id"]
+            ].copy()
+            local_lookup["hugo_symbol"] = local_lookup["hugo_symbol"].astype(
+                str
+            )
             merged = gene_metadata.merge(
                 local_lookup,
                 left_on="symbol",
@@ -125,8 +132,13 @@ class PrismCompoundMixin:
             .index
         )
         filtered = lookup_df[lookup_df["lookup_key"].isin(unique_keys)]
-        filtered = filtered.drop_duplicates(subset=["lookup_key"], keep="first")
-        return filtered.set_index("lookup_key").to_dict(orient="index")
+        filtered = filtered.drop_duplicates(
+            subset=["lookup_key"], keep="first"
+        )
+        result: dict[str, dict[str, Any]] = filtered.set_index(
+            "lookup_key"
+        ).to_dict(orient="index")
+        return result
 
     def _resolve_compound_targets(
         self,
@@ -163,7 +175,7 @@ class PrismCompoundMixin:
 
         rows: list[CompoundTargetResolution] = []
         for compound in compounds_df.itertuples(index=False):
-            broad_id = str(getattr(compound, "broad_id"))
+            broad_id = str(compound.broad_id)
             source_target_text = getattr(compound, target_column)
             tokens = self._split_target_tokens(source_target_text)
             for ordinal, token in enumerate(tokens, start=1):
@@ -174,7 +186,9 @@ class PrismCompoundMixin:
                             broad_id=broad_id,
                             target_ordinal=ordinal,
                             target_symbol=token,
-                            source_target_text="" if pd.isna(source_target_text) else str(source_target_text),
+                            source_target_text=""
+                            if pd.isna(source_target_text)
+                            else str(source_target_text),
                             source_dataset=source_dataset,
                             source_filename=source_filename,
                             local_gene_id=None,
@@ -191,7 +205,9 @@ class PrismCompoundMixin:
                         broad_id=broad_id,
                         target_ordinal=ordinal,
                         target_symbol=token,
-                        source_target_text="" if pd.isna(source_target_text) else str(source_target_text),
+                        source_target_text=""
+                        if pd.isna(source_target_text)
+                        else str(source_target_text),
                         source_dataset=source_dataset,
                         source_filename=source_filename,
                         local_gene_id=str(match["local_gene_id"]),
@@ -263,10 +279,34 @@ class PrismCompoundMixin:
         conn.register(temp_name, deduped)
         try:
             self.db_manager.execute(
-                f"DELETE FROM compounds WHERE broad_id IN (SELECT broad_id FROM {temp_name})"
+                f"DELETE FROM compound_targets WHERE broad_id IN (SELECT broad_id FROM {temp_name})"
             )
             self.db_manager.execute(
-                f"INSERT INTO compounds SELECT * FROM {temp_name}"
+                f"DELETE FROM compounds WHERE broad_id IN (SELECT broad_id FROM {temp_name})"
+            )
+            compound_columns = [
+                "broad_id",
+                "compound_name",
+                "compound_synonyms",
+                "moa",
+                "target_text",
+                "smiles",
+                "phase",
+                "primary_screen_id",
+                "primary_dose_um",
+                "secondary_screen_id",
+                "secondary_row_name",
+                "secondary_passed_str_profiling",
+                "disease_area",
+                "indication",
+                "source_dataset",
+                "source_filename",
+                "release_label",
+                "created_at",
+            ]
+            cols_sql = ", ".join(compound_columns)
+            self.db_manager.execute(
+                f"INSERT INTO compounds ({cols_sql}) SELECT {cols_sql} FROM {temp_name}"
             )
         finally:
             conn.unregister(temp_name)

@@ -38,7 +38,9 @@ class PrismPrimaryWideProcessor(PrismCompoundMixin, BaseProcessor):
         if df.empty:
             raise ValueError("PRISM primary matrix is empty")
         if len(df.columns) < 2:
-            raise ValueError("PRISM primary matrix must contain one compound column plus model columns")
+            raise ValueError(
+                "PRISM primary matrix must contain one compound column plus model columns"
+            )
 
         first_column = df.columns[0]
         missing_compounds = int(df[first_column].isna().sum())
@@ -71,36 +73,123 @@ class PrismPrimaryWideProcessor(PrismCompoundMixin, BaseProcessor):
             compound_column = df.columns[0]
             model_columns = [str(column) for column in df.columns[1:]]
 
+            # Clear wide table first to avoid FK conflicts when replacing the screen row.
+            self.db_manager.execute(f"DROP TABLE IF EXISTS {self.TABLE_NAME}")
+
             self._ensure_screen_row(
                 screen_id="PRISM_PRIMARY_24Q2",
                 dataset_name=self.DATASET_NAME,
                 source_filename=self.dataset_info.filename,
                 screen_kind="primary",
-                release_label=self.dataset_info.release_label_override or self.settings.depmap.release_label,
+                release_label=self.dataset_info.release_label_override
+                or self.settings.depmap.release_label,
             )
 
-            compound_metadata, metadata_warnings = self._load_compound_metadata(file_path)
+            compound_metadata, metadata_warnings = (
+                self._load_compound_metadata(file_path)
+            )
             warnings.extend(metadata_warnings)
             self._replace_compounds_table(compound_metadata)
             target_df = self._resolve_compound_targets(
                 compound_metadata,
                 target_column="target_text",
                 source_dataset=self.COMPOUND_LIST_DATASET,
-                source_filename=DEPMAP_FILES[self.COMPOUND_LIST_DATASET].filename,
+                source_filename=DEPMAP_FILES[
+                    self.COMPOUND_LIST_DATASET
+                ].filename,
             )
             self._replace_compound_targets(
                 target_df,
                 source_dataset=self.COMPOUND_LIST_DATASET,
             )
 
+            # Backfill minimal compound rows for any broad_ids in the matrix
+            # that are missing from the companion compound list.
+            matrix_broad_ids = set(df[compound_column].astype(str).unique())
+            existing_rows = self.db_manager.execute(
+                "SELECT broad_id FROM compounds"
+            ).fetchall()
+            existing_broad_ids = {row[0] for row in existing_rows}
+            missing_ids = matrix_broad_ids - existing_broad_ids
+            if missing_ids:
+                warnings.append(
+                    f"Backfilling {len(missing_ids)} compound rows not in compound list"
+                )
+                missing_df = pd.DataFrame(
+                    {
+                        "broad_id": list(missing_ids),
+                        "source_dataset": self.DATASET_NAME,
+                        "source_filename": self.dataset_info.filename,
+                        "release_label": self.dataset_info.release_label_override,
+                        "created_at": pd.Timestamp.now(),
+                    }
+                )
+                for col in [
+                    "compound_name",
+                    "compound_synonyms",
+                    "moa",
+                    "target_text",
+                    "smiles",
+                    "phase",
+                    "primary_screen_id",
+                    "primary_dose_um",
+                    "secondary_screen_id",
+                    "secondary_row_name",
+                    "secondary_passed_str_profiling",
+                    "disease_area",
+                    "indication",
+                ]:
+                    missing_df[col] = None
+                compound_columns = [
+                    "broad_id",
+                    "compound_name",
+                    "compound_synonyms",
+                    "moa",
+                    "target_text",
+                    "smiles",
+                    "phase",
+                    "primary_screen_id",
+                    "primary_dose_um",
+                    "secondary_screen_id",
+                    "secondary_row_name",
+                    "secondary_passed_str_profiling",
+                    "disease_area",
+                    "indication",
+                    "source_dataset",
+                    "source_filename",
+                    "release_label",
+                    "created_at",
+                ]
+                missing_df = missing_df[compound_columns]
+                temp_name = "prism_missing_compounds"
+                conn = self.db_manager.connect()
+                self.db_manager.execute(f"DROP VIEW IF EXISTS {temp_name}")
+                conn.register(temp_name, missing_df)
+                try:
+                    cols_sql = ", ".join(compound_columns)
+                    self.db_manager.execute(
+                        f"INSERT INTO compounds ({cols_sql}) SELECT {cols_sql} FROM {temp_name}"
+                    )
+                finally:
+                    conn.unregister(temp_name)
+
             self.create_wide_table_schema(model_columns)
-            df_insert = df.rename(columns={compound_column: "broad_id", **self.column_mapping}).copy()
+            df_insert = df.rename(
+                columns={compound_column: "broad_id", **self.column_mapping}
+            ).copy()
             df_insert.insert(1, "screen_id", "PRISM_PRIMARY_24Q2")
             df_insert.insert(2, "created_at", pd.Timestamp.now())
-            ordered_columns = ["broad_id", "screen_id", "created_at", *self.column_mapping.values()]
+            ordered_columns = [
+                "broad_id",
+                "screen_id",
+                "created_at",
+                *self.column_mapping.values(),
+            ]
             df_insert = df_insert[ordered_columns]
 
-            with NamedTemporaryFile(suffix=".parquet", delete=False) as temp_file:
+            with NamedTemporaryFile(
+                suffix=".parquet", delete=False
+            ) as temp_file:
                 temp_path = Path(temp_file.name)
             try:
                 df_insert.to_parquet(temp_path, index=False)
@@ -148,10 +237,12 @@ class PrismPrimaryWideProcessor(PrismCompoundMixin, BaseProcessor):
     def create_wide_table_schema(self, model_ids: list[str]) -> None:
         self.db_manager.execute(f"DROP TABLE IF EXISTS {self.TABLE_NAME}")
         self.column_mapping = {
-            model_id: self._sanitize_model_column(model_id) for model_id in model_ids
+            model_id: self._sanitize_model_column(model_id)
+            for model_id in model_ids
         }
         model_columns_sql = ",\n                ".join(
-            f'"{column_name}" DOUBLE' for column_name in self.column_mapping.values()
+            f'"{column_name}" DOUBLE'
+            for column_name in self.column_mapping.values()
         )
         self.db_manager.execute(
             f"""
@@ -169,7 +260,9 @@ class PrismPrimaryWideProcessor(PrismCompoundMixin, BaseProcessor):
     def _sanitize_model_column(self, model_id: str) -> str:
         return f"model_{str(model_id).replace('-', '_').replace('.', '_')}"
 
-    def _load_compound_metadata(self, matrix_path: Path) -> tuple[pd.DataFrame, list[str]]:
+    def _load_compound_metadata(
+        self, matrix_path: Path
+    ) -> tuple[pd.DataFrame, list[str]]:
         warnings: list[str] = []
         compound_list_info = DEPMAP_FILES[self.COMPOUND_LIST_DATASET]
         compound_list_path = matrix_path.with_name(compound_list_info.filename)
@@ -241,10 +334,12 @@ class PrismPrimaryWideProcessor(PrismCompoundMixin, BaseProcessor):
         compounds_df["indication"] = None
         compounds_df["source_dataset"] = self.COMPOUND_LIST_DATASET
         compounds_df["source_filename"] = compound_list_info.filename
-        compounds_df["release_label"] = compound_list_info.release_label_override
-        compounds_df = compounds_df.dropna(subset=["broad_id"]).drop_duplicates(
-            subset=["broad_id"], keep="first"
+        compounds_df["release_label"] = (
+            compound_list_info.release_label_override
         )
+        compounds_df = compounds_df.dropna(
+            subset=["broad_id"]
+        ).drop_duplicates(subset=["broad_id"], keep="first")
         return compounds_df, warnings
 
     def _ensure_screen_row(
