@@ -588,14 +588,14 @@ def test_protein_mapping_summary_cli_supports_json(
     assert '"protein_count":2' in result.output
 
 
-def test_polars_is_not_exposed_as_a_cli_group() -> None:
-    """Polars access should be documented and tested as a Python API only."""
+def test_polars_is_exposed_as_a_cli_group() -> None:
+    """Polars access should also be reachable from the CLI export surface."""
     runner = CliRunner()
 
     result = runner.invoke(cli, ["--help"])
 
     assert result.exit_code == 0
-    assert "polars" not in result.output
+    assert "polars" in result.output
 
 
 if __name__ == "__main__":

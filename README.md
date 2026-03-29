@@ -209,79 +209,140 @@ Notes:
 - `lineage mutation-frequency` is based on the derived `model_gene_mutation_status` table.
 - `gene dependency-by-mutation` joins `model_gene_mutation_status` to `gene_effects_wide` and reports mutant/WT counts plus mean/median dependency and `delta_mean`.
 
-## Polars Python API
+## Polars API and export surface
 
-Polars support is exposed as a **Python API for exploratory analysis**, not as a CLI surface.
+Polars support now has two layers:
 
-### Why it works this way
+1. **raw table snapshots** for direct access to canonical DuckDB tables
+2. **curated datasets** for notebook-friendly long/enriched analysis surfaces
 
-A shell command cannot return a live `polars.LazyFrame`, and the cleanest lazy workflow today is still:
+The core idea is still the same:
 
-- DuckDB as the local source of truth
-- export selected DuckDB tables to Parquet snapshots
-- reopen those snapshots with `pl.scan_parquet(...)`
+- DuckDB is the local source of truth
+- selected tables or curated dataset queries are exported to Parquet snapshots
+- Polars reopens those snapshots lazily via `pl.scan_parquet(...)`
 
-That is what `depmap_db.polars` does for you.
+A CLI cannot return a live `polars.LazyFrame`, but it *can* materialize the Parquet snapshots you want.
 
-### Supported tables
+### CLI: export Polars snapshots
+
+```bash
+# raw tables
+
+depmap-db polars export \
+  --table models \
+  --table mutations
+
+# curated long-format datasets for the main downstream modalities
+
+depmap-db polars export \
+  --dataset proteomics_long \
+  --dataset mutation_events \
+  --dataset drug_primary_long \
+  --dataset drug_secondary_enriched
+```
+
+### Raw tables exposed to Polars
 
 - `models`
 - `genes`
 - `protein_features`
+- `compounds`
+- `compound_targets`
+- `drug_screens`
 - `gene_effects_wide`
 - `gene_expression_wide`
 - `protein_expression_ms_wide`
+- `drug_response_primary_wide`
+- `drug_response_secondary`
+- `drug_response_secondary_dose`
 - `mutations`
 - `model_gene_mutation_status`
 
-### Recommended usage pattern
+### Curated Polars datasets
 
-In a notebook or REPL, call `prepare_lazy_tables(...)` for the tables you want to explore. This will refresh Parquet snapshots when needed and return Polars `LazyFrame`s ready for composition.
+These are the recommended notebook-facing entry points when you want the main Helfrid-relevant modalities in a comparable way.
+
+- `mutation_events` → mutation event table enriched with model metadata
+- `proteomics_long` → Gygi MS matrix reshaped to one row per model × protein with protein bridge metadata
+- `drug_primary_long` → PRISM primary matrix reshaped to one row per compound × model with compound/target metadata
+- `drug_secondary_enriched` → PRISM secondary dose-response summaries enriched with model/compound/screen metadata
+
+### Recommended Python usage
+
+For Helfrid-style downstream analysis, the intended starting point is:
+
+- `proteomics_long` for model × protein abundance
+- `mutation_events` for event-level mutation context
+- `drug_primary_long` for broad primary PRISM sensitivity screens
+- `drug_secondary_enriched` for fitted secondary PRISM response summaries
+
+Use `prepare_lazy_datasets(...)` when you want analysis-ready long datasets:
 
 ```python
 import polars as pl
-from depmap_db.polars import prepare_lazy_tables
+from depmap_db.polars import prepare_lazy_datasets
 
-tables = prepare_lazy_tables(
-    tables=["models", "mutations", "model_gene_mutation_status"],
+frames = prepare_lazy_datasets(
+    datasets=[
+        "proteomics_long",
+        "mutation_events",
+        "drug_primary_long",
+        "drug_secondary_enriched",
+    ]
 )
 
-models = tables["models"]
-mutations = tables["mutations"]
-mutation_status = tables["model_gene_mutation_status"]
+proteomics = frames["proteomics_long"]
+mutations = frames["mutation_events"]
+drug_primary = frames["drug_primary_long"]
+drug_secondary = frames["drug_secondary_enriched"]
 
-tp53_events = (
-    mutations
-    .filter(pl.col("hugo_symbol") == "TP53")
+rbm47_tp53 = (
+    proteomics
+    .filter(pl.col("gene_symbol") == "RBM47")
     .join(
-        models.select(["model_id", "cell_line_name", "oncotree_lineage"]),
+        mutations
+        .filter(pl.col("gene_symbol") == "TP53")
+        .select(["model_id", "gene_symbol", "protein_change", "hotspot"]),
         on="model_id",
         how="left",
     )
 )
 
-print(tp53_events.limit(10).collect())
+print(rbm47_tp53.limit(10).collect())
+```
+
+Use `prepare_lazy_tables(...)` when you want the canonical stored tables directly:
+
+```python
+from depmap_db.polars import prepare_lazy_tables
+
+tables = prepare_lazy_tables(
+    tables=["models", "mutations", "model_gene_mutation_status"],
+)
 ```
 
 ### Reuse existing snapshots
 
-If the Parquet snapshots already exist and you just want to reopen them, use `get_lazy_tables(...)`:
+If the Parquet snapshots already exist and you just want to reopen them:
 
 ```python
-from depmap_db.polars import get_lazy_tables
+from depmap_db.polars import get_lazy_datasets, get_lazy_tables
 
+frames = get_lazy_datasets(datasets=["proteomics_long", "drug_primary_long"])
 tables = get_lazy_tables(tables=["models", "mutations"])
 ```
 
-### Single-table helpers
+### Single-object helpers
 
-For quick exploratory work, the module also exposes convenience helpers for individual tables:
+For quick exploratory work, the module also exposes convenience helpers for both tables and curated datasets:
 
 ```python
-from depmap_db.polars import lazy_models, lazy_mutations
+from depmap_db.polars import lazy_models, lazy_mutations, lazy_proteomics_long
 
 models = lazy_models()
 mutations = lazy_mutations()
+proteomics = lazy_proteomics_long()
 ```
 
 ### Snapshot location

@@ -29,6 +29,12 @@ from .etl.processors import (
     ProteinExpressionMSWideProcessor,
 )
 from .etl.processors.base import BaseProcessor
+from .polars import (
+    SUPPORTED_POLARS_DATASETS,
+    SUPPORTED_POLARS_TABLES,
+    export_polars_datasets,
+    export_polars_tables,
+)
 from .query import (
     GeneQueryService,
     MutationClass,
@@ -1491,6 +1497,95 @@ def protein_expression_summary(
         df,
         output_format,
         title=f"Protein abundance summary for {protein_query} by {group_by}",
+    )
+
+
+@cli.group()
+def polars() -> None:
+    """Export raw tables or curated datasets for lazy Polars analysis."""
+
+
+@polars.command("export")
+@click.option(
+    "--table",
+    "tables",
+    multiple=True,
+    type=click.Choice(SUPPORTED_POLARS_TABLES),
+    help="Raw DuckDB table(s) to export as Parquet snapshots.",
+)
+@click.option(
+    "--dataset",
+    "datasets",
+    multiple=True,
+    type=click.Choice(SUPPORTED_POLARS_DATASETS),
+    help="Curated Polars-ready dataset(s) to export as Parquet snapshots.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(path_type=Path),
+    help="Directory for Parquet snapshots (default: data/polars).",
+)
+@click.option(
+    "--database-path",
+    type=click.Path(exists=True, path_type=Path),
+    help="Optional explicit DuckDB database path.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    help="Rewrite snapshots even when existing files look current.",
+)
+@handle_exceptions
+def polars_export(
+    tables: tuple[str, ...],
+    datasets: tuple[str, ...],
+    output_dir: Path | None,
+    database_path: Path | None,
+    overwrite: bool,
+) -> None:
+    """Export Polars snapshots for raw tables and/or curated long datasets."""
+    if not tables and not datasets:
+        raise ValueError(
+            "Please pass at least one --table and/or --dataset value."
+        )
+
+    exported_paths: list[tuple[str, str, Path]] = []
+
+    if tables:
+        exported_tables = export_polars_tables(
+            output_dir=output_dir,
+            tables=tables,
+            overwrite=overwrite,
+            db_path=database_path,
+        )
+        exported_paths.extend(
+            ("table", name, path)
+            for name, path in exported_tables.items()
+        )
+
+    if datasets:
+        exported_datasets = export_polars_datasets(
+            output_dir=output_dir,
+            datasets=datasets,
+            overwrite=overwrite,
+            db_path=database_path,
+        )
+        exported_paths.extend(
+            ("dataset", name, path)
+            for name, path in exported_datasets.items()
+        )
+
+    results_table = Table(title="Polars Export Results")
+    results_table.add_column("Kind", style="cyan")
+    results_table.add_column("Name", style="white")
+    results_table.add_column("Parquet", style="green")
+
+    for kind, name, path in exported_paths:
+        results_table.add_row(kind, name, str(path))
+
+    console.print(results_table)
+    console.print(
+        f"[green]✓ Exported {len(exported_paths)} Polars snapshot(s)[/green]"
     )
 
 
