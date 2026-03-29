@@ -377,6 +377,12 @@ class Schema:
                 auc DOUBLE,
                 ec50 DOUBLE,
                 ic50 DOUBLE,
+                fit_name VARCHAR,
+                successful_fit BOOLEAN,
+                auc_riemann DOUBLE,
+                minimum_dose_um DOUBLE,
+                maximum_dose_um DOUBLE,
+                source_project_id VARCHAR,
                 passed_str_profiling BOOLEAN,
                 row_name VARCHAR,
                 compound_name VARCHAR,
@@ -389,6 +395,48 @@ class Schema:
                 source_dataset VARCHAR NOT NULL,
                 source_filename VARCHAR,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (broad_id) REFERENCES compounds(broad_id),
+                FOREIGN KEY (model_id) REFERENCES models(model_id),
+                FOREIGN KEY (screen_id) REFERENCES drug_screens(screen_id)
+            )
+            """,
+            )
+        )
+
+        self._add_table(
+            TableSchema(
+                name="drug_response_secondary_dose",
+                table_type=TableType.CORE_DATA,
+                dependencies=["drug_response_secondary"],
+                description=(
+                    "Dose-level PRISM-like secondary response summaries collapsed to "
+                    "one row per compound-model-screen-dose combination"
+                ),
+                sql="""
+            CREATE TABLE IF NOT EXISTS drug_response_secondary_dose (
+                dose_response_id VARCHAR PRIMARY KEY,
+                response_id VARCHAR NOT NULL,
+                broad_id VARCHAR NOT NULL,
+                model_id VARCHAR NOT NULL,
+                screen_id VARCHAR NOT NULL,
+                dose_um DOUBLE NOT NULL,
+                dose_unit VARCHAR,
+                median_l2fc DOUBLE,
+                median_l2fc_uncorrected DOUBLE,
+                num_bio_reps INTEGER,
+                pool_id VARCHAR,
+                lua VARCHAR,
+                cell_set VARCHAR,
+                growth_pattern VARCHAR,
+                pert_type VARCHAR,
+                pert_vehicle VARCHAR,
+                pert_plate VARCHAR,
+                day INTEGER,
+                source_project_id VARCHAR,
+                source_dataset VARCHAR NOT NULL,
+                source_filename VARCHAR,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (response_id) REFERENCES drug_response_secondary(response_id),
                 FOREIGN KEY (broad_id) REFERENCES compounds(broad_id),
                 FOREIGN KEY (model_id) REFERENCES models(model_id),
                 FOREIGN KEY (screen_id) REFERENCES drug_screens(screen_id)

@@ -23,6 +23,7 @@ from .etl.processors import (
     GeneProcessor,
     ModelProcessor,
     MutationsProcessor,
+    PrismMTS028Processor,
     PrismPrimaryWideProcessor,
     PrismSecondaryProcessor,
     ProteinExpressionMSWideProcessor,
@@ -58,6 +59,7 @@ def _get_processor(dataset_name: str) -> BaseProcessor | None:
         "Model": ModelProcessor,
         "OmicsSomaticMutations": MutationsProcessor,
         "ProteomicsMSGygi": ProteinExpressionMSWideProcessor,
+        "PRISMCustomMTS028HELFRIDHOCHEGGER": PrismMTS028Processor,
         "PRISMPrimaryRepurposingExtended": PrismPrimaryWideProcessor,
         "PRISMSecondaryDoseResponseCurveParameters": PrismSecondaryProcessor,
     }
@@ -101,6 +103,8 @@ def _detect_dataset_from_filename(filename: str) -> str | None:
         return "ProteomicsMSGygi"
     elif "extended_primary_data_matrix" in filename_lower:
         return "PRISMPrimaryRepurposingExtended"
+    elif filename_lower == "mts028_helfrid_hochegger_drc_table.csv":
+        return "PRISMCustomMTS028HELFRIDHOCHEGGER"
     elif "secondary-screen-dose-response-curve-parameters" in filename_lower:
         return "PRISMSecondaryDoseResponseCurveParameters"
 

@@ -6,6 +6,7 @@ from .gene_effect_wide import GeneEffectWideProcessor
 from .gene_expression_wide import GeneExpressionWideProcessor
 from .model import ModelProcessor
 from .mutations import MutationsProcessor
+from .prism_mts028 import PrismMTS028Processor
 from .prism_primary import PrismPrimaryWideProcessor
 from .prism_secondary import PrismSecondaryProcessor
 from .protein_expression_ms_wide import ProteinExpressionMSWideProcessor
@@ -18,6 +19,7 @@ __all__ = [
     "GeneProcessor",
     "ModelProcessor",
     "MutationsProcessor",
+    "PrismMTS028Processor",
     "PrismPrimaryWideProcessor",
     "PrismSecondaryProcessor",
     "ProteinExpressionMSWideProcessor",

@@ -29,8 +29,6 @@ from .polars import (
     prepare_lazy_tables,
 )
 
-
-
 __all__ = [
     "__version__",
     "set_env_vars",

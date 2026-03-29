@@ -255,6 +255,12 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
         clean["created_at"] = pd.Timestamp.now()
         clean["source_dataset"] = self.DATASET_NAME
         clean["source_filename"] = self.dataset_info.filename
+        clean["fit_name"] = None
+        clean["successful_fit"] = None
+        clean["auc_riemann"] = None
+        clean["minimum_dose_um"] = None
+        clean["maximum_dose_um"] = None
+        clean["source_project_id"] = None
         ordered = [
             "response_id",
             "broad_id",
@@ -268,6 +274,12 @@ class PrismSecondaryProcessor(PrismCompoundMixin, BaseProcessor):
             "auc",
             "ec50",
             "ic50",
+            "fit_name",
+            "successful_fit",
+            "auc_riemann",
+            "minimum_dose_um",
+            "maximum_dose_um",
+            "source_project_id",
             "passed_str_profiling",
             "row_name",
             "compound_name",
