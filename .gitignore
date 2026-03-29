@@ -80,6 +80,9 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Local/internal screen drops
+MTS028_HELFRID_HOCHEGGER/
+
 # IPython
 profile_default/
 ipython_config.py
