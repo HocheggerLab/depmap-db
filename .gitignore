@@ -83,6 +83,9 @@ target/
 # Local/internal screen drops
 MTS028_HELFRID_HOCHEGGER/
 
+# marimo scratch state
+notebooks/__marimo__/
+
 # IPython
 profile_default/
 ipython_config.py
