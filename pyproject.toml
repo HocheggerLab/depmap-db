@@ -24,6 +24,8 @@ dependencies = [
     "certifi>=2025.8.3",
     "requests>=2.32.5",
     "marimo>=0.21.1",
+    "seaborn>=0.13.2",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
@@ -57,6 +59,8 @@ exclude = [
     "build/.*",
     "dist/.*",
     "migrations/.*",
+    "^notebooks/",
+    "src/depmap_db/notebooks/",
 ]
 
 incremental = true
@@ -94,6 +98,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 79
+extend-exclude = ["src/depmap_db/notebooks", "notebooks"]
 lint.select = [
     "E", "F", "W", #flake8
     "UP", # pyupgrade

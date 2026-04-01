@@ -267,3 +267,5 @@ docker-compose.override.yml
 **/.cache*
 data
 data/depmap.duckdb
+
+**/*.ipynb

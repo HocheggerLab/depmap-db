@@ -1,14 +1,17 @@
 """Python and CLI-facing helpers for working with local DepMap data in Polars.
 
-DuckDB remains the source of truth for local DepMap storage. This module makes
-that data available to Polars by exporting Parquet snapshots that can be opened
-lazily with ``pl.scan_parquet(...)``.
+DuckDB remains the source of truth for local DepMap storage. This module
+provides two ways to get data into Polars:
 
-Two related surfaces are supported:
+1. **Direct scans** (``scan_*`` functions): query DuckDB and return Polars
+   DataFrames via zero-copy Arrow transfer. No intermediate files — always
+   returns current data. Prefer this for interactive / notebook use.
 
-- **Raw tables**: direct Parquet snapshots of canonical DuckDB tables.
-- **Curated datasets**: analysis-oriented exports that reshape or enrich the
-  stored tables into a more notebook-friendly long format.
+2. **Parquet snapshots** (``lazy_*`` / ``export_*`` functions): materialise
+   DuckDB tables to Parquet files that can be opened lazily with
+   ``pl.scan_parquet(...)``. Useful for sharing data or working offline.
+
+Both surfaces expose raw tables and curated (analysis-oriented) datasets.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Final
 
+import duckdb
 import polars as pl
 
 from .config import get_settings
@@ -97,7 +101,9 @@ def resolve_database_path(db_path: str | Path | None = None) -> Path:
 def resolve_polars_output_dir(output_dir: str | Path | None = None) -> Path:
     """Resolve the Parquet snapshot directory used for lazy Polars scans."""
     resolved = (
-        Path(output_dir) if output_dir is not None else DEFAULT_POLARS_OUTPUT_DIR
+        Path(output_dir)
+        if output_dir is not None
+        else DEFAULT_POLARS_OUTPUT_DIR
     )
     resolved.mkdir(parents=True, exist_ok=True)
     return resolved
@@ -519,6 +525,220 @@ def lazy_drug_secondary_enriched(
     )
 
 
+# ---------------------------------------------------------------------------
+# Direct DuckDB → Polars scan API (no Parquet intermediate)
+# ---------------------------------------------------------------------------
+
+
+def _open_read_only_connection(
+    db_path: str | Path | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """Open a read-only DuckDB connection for scanning."""
+    resolved = resolve_database_path(db_path)
+    return duckdb.connect(str(resolved), read_only=True)
+
+
+def scan_table(
+    table_name: str,
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return a DuckDB table as a Polars LazyFrame via zero-copy Arrow.
+
+    Args:
+        table_name: Name of the table (must be in SUPPORTED_POLARS_TABLES).
+        db_path: Optional path to the DuckDB database file.
+
+    Returns:
+        Polars LazyFrame backed by the query result.
+    """
+    resolve_polars_tables([table_name])
+    conn = _open_read_only_connection(db_path)
+    try:
+        return (
+            conn.sql(f"SELECT * FROM {_quote_identifier(table_name)}")
+            .pl()
+            .lazy()
+        )
+    finally:
+        conn.close()
+
+
+def scan_dataset(
+    dataset_name: str,
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return a curated dataset as a Polars LazyFrame via zero-copy Arrow.
+
+    Uses the same SQL reshaping logic as the Parquet export but skips the
+    intermediate file — the result always reflects the current database state.
+
+    Args:
+        dataset_name: Name of the dataset (must be in SUPPORTED_POLARS_DATASETS).
+        db_path: Optional path to the DuckDB database file.
+
+    Returns:
+        Polars LazyFrame backed by the query result.
+    """
+    resolve_polars_datasets([dataset_name])
+    resolved_db_path = resolve_database_path(db_path)
+    with DatabaseManager(db_path=resolved_db_path) as db_manager:
+        query = _build_dataset_query(dataset_name, db_manager)
+        conn = db_manager.connect()
+        return conn.sql(query).pl().lazy()
+
+
+def scan_tables(
+    tables: Iterable[str] | None = None,
+    *,
+    db_path: str | Path | None = None,
+) -> dict[str, pl.LazyFrame]:
+    """Return multiple DuckDB tables as Polars LazyFrames.
+
+    Args:
+        tables: Table names to scan. ``None`` returns all supported tables.
+        db_path: Optional path to the DuckDB database file.
+
+    Returns:
+        Mapping of table name to LazyFrame.
+    """
+    resolved = resolve_polars_tables(tables)
+    return {name: scan_table(name, db_path=db_path) for name in resolved}
+
+
+def scan_datasets(
+    datasets: Iterable[str] | None = None,
+    *,
+    db_path: str | Path | None = None,
+) -> dict[str, pl.LazyFrame]:
+    """Return multiple curated datasets as Polars LazyFrames.
+
+    Args:
+        datasets: Dataset names to scan. ``None`` returns all supported.
+        db_path: Optional path to the DuckDB database file.
+
+    Returns:
+        Mapping of dataset name to LazyFrame.
+    """
+    resolved = resolve_polars_datasets(datasets)
+    return {name: scan_dataset(name, db_path=db_path) for name in resolved}
+
+
+# -- Convenience wrappers (mirror the lazy_* Parquet API) ------------------
+
+
+def scan_models(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the ``models`` table directly from DuckDB."""
+    return scan_table("models", db_path=db_path)
+
+
+def scan_genes(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the ``genes`` table directly from DuckDB."""
+    return scan_table("genes", db_path=db_path)
+
+
+def scan_gene_effects_wide(
+    *, db_path: str | Path | None = None
+) -> pl.LazyFrame:
+    """Return the ``gene_effects_wide`` table directly from DuckDB."""
+    return scan_table("gene_effects_wide", db_path=db_path)
+
+
+def scan_gene_expression_wide(
+    *, db_path: str | Path | None = None
+) -> pl.LazyFrame:
+    """Return the ``gene_expression_wide`` table directly from DuckDB."""
+    return scan_table("gene_expression_wide", db_path=db_path)
+
+
+def scan_protein_expression_ms_wide(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return the ``protein_expression_ms_wide`` table directly from DuckDB."""
+    return scan_table("protein_expression_ms_wide", db_path=db_path)
+
+
+def scan_mutations(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the ``mutations`` table directly from DuckDB."""
+    return scan_table("mutations", db_path=db_path)
+
+
+def scan_model_gene_mutation_status(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return ``model_gene_mutation_status`` directly from DuckDB."""
+    return scan_table("model_gene_mutation_status", db_path=db_path)
+
+
+def scan_compounds(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the ``compounds`` table directly from DuckDB."""
+    return scan_table("compounds", db_path=db_path)
+
+
+def scan_compound_targets(
+    *, db_path: str | Path | None = None
+) -> pl.LazyFrame:
+    """Return the ``compound_targets`` table directly from DuckDB."""
+    return scan_table("compound_targets", db_path=db_path)
+
+
+def scan_drug_response_primary_wide(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return ``drug_response_primary_wide`` directly from DuckDB."""
+    return scan_table("drug_response_primary_wide", db_path=db_path)
+
+
+def scan_drug_response_secondary(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return ``drug_response_secondary`` directly from DuckDB."""
+    return scan_table("drug_response_secondary", db_path=db_path)
+
+
+def scan_drug_response_secondary_dose(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return ``drug_response_secondary_dose`` directly from DuckDB."""
+    return scan_table("drug_response_secondary_dose", db_path=db_path)
+
+
+def scan_mutation_events(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the curated ``mutation_events`` dataset directly from DuckDB."""
+    return scan_dataset("mutation_events", db_path=db_path)
+
+
+def scan_proteomics_long(*, db_path: str | Path | None = None) -> pl.LazyFrame:
+    """Return the curated ``proteomics_long`` dataset directly from DuckDB."""
+    return scan_dataset("proteomics_long", db_path=db_path)
+
+
+def scan_drug_primary_long(
+    *, db_path: str | Path | None = None
+) -> pl.LazyFrame:
+    """Return the curated ``drug_primary_long`` dataset directly from DuckDB."""
+    return scan_dataset("drug_primary_long", db_path=db_path)
+
+
+def scan_drug_secondary_enriched(
+    *,
+    db_path: str | Path | None = None,
+) -> pl.LazyFrame:
+    """Return curated ``drug_secondary_enriched`` directly from DuckDB."""
+    return scan_dataset("drug_secondary_enriched", db_path=db_path)
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
 def _resolve_names(
     *,
     requested: Iterable[str] | None,
@@ -576,7 +796,9 @@ def _get_lazy_snapshots(
     return lazy_frames
 
 
-def _build_dataset_query(dataset_name: str, db_manager: DatabaseManager) -> str:
+def _build_dataset_query(
+    dataset_name: str, db_manager: DatabaseManager
+) -> str:
     """Build the SQL query used to export one curated dataset."""
     builders: dict[str, Callable[[DatabaseManager], str]] = {
         "mutation_events": _build_mutation_events_query,
@@ -648,7 +870,9 @@ def _build_proteomics_long_query(db_manager: DatabaseManager) -> str:
         table_name="protein_expression_ms_wide",
         excluded_columns=_PROTEOMICS_EXCLUDED_COLUMNS,
     )
-    unpivot_columns = ", ".join(_quote_identifier(name) for name in protein_columns)
+    unpivot_columns = ", ".join(
+        _quote_identifier(name) for name in protein_columns
+    )
 
     return f"""
     WITH long_matrix AS (
@@ -707,7 +931,9 @@ def _build_drug_primary_long_query(db_manager: DatabaseManager) -> str:
         table_name="drug_response_primary_wide",
         excluded_columns=_DRUG_PRIMARY_EXCLUDED_COLUMNS,
     )
-    unpivot_columns = ", ".join(_quote_identifier(name) for name in model_columns)
+    unpivot_columns = ", ".join(
+        _quote_identifier(name) for name in model_columns
+    )
 
     return f"""
     WITH target_summary AS (

@@ -39,7 +39,7 @@ repos:
     rev: v1.15.0
     hooks:
         - id: mypy
-          exclude: ^tests/
+          exclude: ^(tests/|notebooks/|src/depmap_db/notebooks/)
           additional_dependencies:
             - types-click
             - pydantic
