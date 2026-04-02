@@ -23,7 +23,7 @@ _STYLE = Path(__file__).parent / "hhlab_style01.mplstyle"
 def analyse_by_lineage(
     gene: str,
     assay: Literal["dependency", "expression"] = "dependency",
-    db_path: str | Path = "/Users/hh65/code/depmap-db/data/depmap.duckdb",
+    db_path: str | Path | None = None,
 ) -> pl.DataFrame:
     """Get CRISPR gene effect or expression across lineages."""
     models = scan_models(db_path=db_path).select(
@@ -139,7 +139,7 @@ def plot_lineage(
 def lineage_analysis(
     gene: str,
     assay: Literal["dependency", "expression"] = "dependency",
-    db_path: str | Path = "/Users/hh65/code/depmap-db/data/depmap.duckdb",
+    db_path: str | Path | None = None,
     min_models: int = 3,
     figsize: tuple[float, float] | None = None,
 ) -> plt.Figure:

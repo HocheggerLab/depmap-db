@@ -339,8 +339,14 @@ def init(database_path: Path | None, memory: bool) -> None:
 
 
 @cli.command()
+@click.option(
+    "--check-updates",
+    is_flag=True,
+    default=False,
+    help="Check DepMap portal for newer releases (requires internet).",
+)
 @handle_exceptions
-def status() -> None:
+def status(*, check_updates: bool) -> None:
     """Show database status and information."""
     settings = get_settings()
     db_manager = get_db_manager()
@@ -369,6 +375,40 @@ Size: {db_size:,} bytes"""
             "[red]No schema found - run 'depmap-db init' first[/red]"
         )
         return
+
+    # Release tracking
+    tracker = ReleaseTracker()
+    snapshot = tracker.load()
+    if snapshot:
+        release_lines = [
+            f"Configured release: {settings.depmap.release_label}",
+            f"Applied release:    {snapshot.release_label}",
+            f"Applied at:         {snapshot.generated_at}",
+        ]
+        # Per-dataset release tracks
+        distinct = sorted(set(snapshot.dataset_releases.values()))
+        if len(distinct) > 1:
+            release_lines.append("")
+            release_lines.append("Per-dataset releases:")
+            for ds, rl in sorted(snapshot.dataset_releases.items()):
+                release_lines.append(f"  {ds}: {rl}")
+
+        console.print(
+            Panel(
+                "\n".join(release_lines),
+                title="Release Tracking",
+                title_align="left",
+            )
+        )
+    else:
+        console.print(
+            "[yellow]No release state found — "
+            "run 'depmap-db refresh' to track releases[/yellow]"
+        )
+
+    # Check for updates from DepMap portal
+    if check_updates:
+        _check_for_updates(settings, snapshot)
 
     # Tables info
     try:
@@ -432,6 +472,62 @@ Size: {db_size:,} bytes"""
 
     except (OSError, RuntimeError) as e:
         console.print(f"[red]Error getting table information: {e}[/red]")
+
+
+def _check_for_updates(
+    settings: Any,
+    snapshot: Any,
+) -> None:
+    """Check the DepMap manifest for newer releases than what's applied."""
+    import asyncio
+
+    from .downloader.depmap_client import DepMapClient
+
+    async def _fetch_latest() -> str | None:
+        client = DepMapClient()
+        manifest = await client._fetch_manifest()
+        if not manifest:
+            return None
+        # Find the newest release label across all manifest entries
+        newest = max(
+            manifest,
+            key=lambda e: (e.release_date, e.release),
+        )
+        return newest.release
+
+    try:
+        console.print("[dim]Checking DepMap portal for updates...[/dim]")
+        latest = asyncio.run(_fetch_latest())
+        if latest is None:
+            console.print(
+                "[yellow]Could not determine latest release[/yellow]"
+            )
+            return
+
+        local_label = (
+            snapshot.release_label
+            if snapshot
+            else settings.depmap.release_label
+        )
+        if latest == local_label:
+            console.print(
+                f"[green]Up to date — latest release is {latest}[/green]"
+            )
+        else:
+            console.print(
+                Panel(
+                    (
+                        f"Local:  {local_label}\n"
+                        f"Latest: [bold]{latest}[/bold]\n\n"
+                        "Run [cyan]depmap-db refresh[/cyan] to update."
+                    ),
+                    title="[yellow]Update Available[/yellow]",
+                    title_align="left",
+                    border_style="yellow",
+                )
+            )
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[yellow]Could not check for updates: {e}[/yellow]")
 
 
 @cli.command()
@@ -1559,8 +1655,7 @@ def polars_export(
             db_path=database_path,
         )
         exported_paths.extend(
-            ("table", name, path)
-            for name, path in exported_tables.items()
+            ("table", name, path) for name, path in exported_tables.items()
         )
 
     if datasets:
@@ -1571,8 +1666,7 @@ def polars_export(
             db_path=database_path,
         )
         exported_paths.extend(
-            ("dataset", name, path)
-            for name, path in exported_datasets.items()
+            ("dataset", name, path) for name, path in exported_datasets.items()
         )
 
     results_table = Table(title="Polars Export Results")
