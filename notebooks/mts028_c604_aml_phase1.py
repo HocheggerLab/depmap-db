@@ -40,36 +40,40 @@ def _():
 @app.cell
 def _(mo):
     mo.md(r"""
-    # Phase 1 AML analysis for the C-604 MTS028 screen
+    # C-604 / MASTL AML notebook — endpoint-framed phase 1
 
-    This notebook reframes phase 1 around what the screen can actually support.
+    This notebook intentionally treats **2 µM growth fraction** as the primary phenotype.
 
-    The assay has eight dose points, but the **interesting transition region is sparsely sampled**. That makes this a weak setting for confident claims about fine-grained curve shape, transition dose, or mechanistic differences in slope. So phase 1 focuses on the clearest readout we have: the **top dose (2 µM)**.
+    Why this framing changed:
 
-    Core questions:
+    - The screen has eight doses, but the largest informative gap is between **0.6667 and 2.0 µM**.
+    - That is exactly the range where many response transitions appear to occur.
+    - Because that transition region is undersampled, **curve-shape taxonomy, transition-dose inference, and AUC-first language are too confident for the design**.
 
-    1. **Is AML more sensitive than other lineages at 2 µM?**
-    2. **Is AML internally heterogeneous at 2 µM?**
-    3. **What candidate molecular features separate strong AML responders from weaker AML responders at 2 µM?**
+    So the notebook now asks:
 
-    Conventions used here:
+    1. **Is AML sensitive at the 2 µM endpoint relative to other groups?**
+    2. **Is AML heterogeneous at 2 µM?**
+    3. **What candidate molecular features separate strong versus weak AML 2 µM responders?**
 
-    - Screen summary fits come from `drug_response_secondary`.
-    - Dose-level measurements come from `drug_response_secondary_dose`.
-    - AML is defined as `oncotree_primary_disease == "Acute Myeloid Leukemia"`.
-    - Dose-level effect is summarized as **growth fraction = `2 ** median_l2fc`**.
-      Lower values indicate stronger inhibition at that dose.
-    - **AUC is shown only as secondary context**, not as the main basis for claims.
+    Conventions:
+
+    - Primary phenotype: **growth fraction = `2 ** median_l2fc` at 2 µM**.
+      Lower values mean stronger inhibition.
+    - Fitted `auc`, `ic50`, and `ec50` remain visible as **secondary context only**.
+    - Dose-series plots are retained as descriptive background, not as mechanistic evidence about curve class.
     """)
     return
 
 
 @app.cell
 def _(PROJECT_ROOT, mo):
+    from pathlib import Path
+
     SCREEN_ID = "MTS028_BIAS_CORRECTED"
     AML_DISEASE = "Acute Myeloid Leukemia"
     TOP_DOSE_UM = 2.0
-    DB_PATH = PROJECT_ROOT / "data" / "depmap.duckdb"
+    DB_PATH = Path.home() / ".depmap" / "depmap.duckdb"
     POLARS_DIR = PROJECT_ROOT / "data" / "polars"
 
     min_lineage_n = mo.ui.slider(
@@ -84,7 +88,7 @@ def _(PROJECT_ROOT, mo):
         stop=40,
         step=5,
         value=33,
-        label="Responder grouping tail size (% of AML models in strong and weak groups)",
+        label="Responder tail size (% of AML models per strong/weak tail)",
     )
     mo.hstack([min_lineage_n, responder_tail_pct], justify="start")
     return (
@@ -137,20 +141,21 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         *,
         min_n: int = 8,
     ) -> pd.DataFrame:
-        dose_summary = top_dose_df.groupby(
-            "analysis_group", as_index=False
-        ).agg(
-            n_models=("model_id", "nunique"),
-            median_growth_fraction=("growth_fraction", "median"),
-            mean_growth_fraction=("growth_fraction", "mean"),
-            q1_growth_fraction=(
-                "growth_fraction",
-                lambda x: x.quantile(0.25),
-            ),
-            q3_growth_fraction=(
-                "growth_fraction",
-                lambda x: x.quantile(0.75),
-            ),
+        dose_summary = (
+            top_dose_df.groupby("analysis_group", as_index=False)
+            .agg(
+                n_models=("model_id", "nunique"),
+                median_growth_fraction=("growth_fraction", "median"),
+                mean_growth_fraction=("growth_fraction", "mean"),
+                q1_growth_fraction=(
+                    "growth_fraction",
+                    lambda x: x.quantile(0.25),
+                ),
+                q3_growth_fraction=(
+                    "growth_fraction",
+                    lambda x: x.quantile(0.75),
+                ),
+            )
         )
         auc_summary = (
             response_df.dropna(subset=["auc"])
@@ -164,45 +169,9 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             dose_summary.merge(auc_summary, on="analysis_group", how="left")
             .query("n_models >= @min_n")
             .sort_values(
-                ["median_growth_fraction", "n_models"], ascending=[True, False]
+                ["median_growth_fraction", "n_models"],
+                ascending=[True, False],
             )
-            .reset_index(drop=True)
-        )
-
-    def build_top_dose_group_summary(
-        top_dose_df: pd.DataFrame,
-    ) -> pd.DataFrame:
-        return (
-            top_dose_df.groupby("aml_status", as_index=False)
-            .agg(
-                n_models=("model_id", "nunique"),
-                median_growth_fraction=("growth_fraction", "median"),
-                q1_growth_fraction=(
-                    "growth_fraction",
-                    lambda x: x.quantile(0.25),
-                ),
-                q3_growth_fraction=(
-                    "growth_fraction",
-                    lambda x: x.quantile(0.75),
-                ),
-                mean_growth_fraction=("growth_fraction", "mean"),
-            )
-            .sort_values("median_growth_fraction")
-            .reset_index(drop=True)
-        )
-
-    def build_aml_model_summary(
-        aml_top_dose_df: pd.DataFrame,
-        aml_response_df: pd.DataFrame,
-    ) -> pd.DataFrame:
-        auc_cols = ["model_id", "auc", "ic50", "ec50"]
-        return (
-            aml_top_dose_df.merge(
-                aml_response_df.loc[:, auc_cols],
-                on="model_id",
-                how="left",
-            )
-            .sort_values("growth_fraction")
             .reset_index(drop=True)
         )
 
@@ -227,8 +196,6 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             "Weak responder"
         )
         return out, {
-            "lower_quantile": tail_fraction,
-            "upper_quantile": 1.0 - tail_fraction,
             "strong_max_growth_fraction": lower_q,
             "weak_min_growth_fraction": upper_q,
         }
@@ -259,6 +226,20 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         )
         return summary.merge(auc_summary, on="responder_group", how="left")
 
+    def build_aml_model_summary(
+        aml_top_dose_df: pd.DataFrame,
+        aml_response_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        return (
+            aml_top_dose_df.merge(
+                aml_response_df.loc[:, ["model_id", "auc", "ic50", "ec50"]],
+                on="model_id",
+                how="left",
+            )
+            .sort_values("growth_fraction")
+            .reset_index(drop=True)
+        )
+
     def scan_wide_feature_table(
         wide_df: pd.DataFrame,
         *,
@@ -266,7 +247,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         meta_cols: list[str],
         min_present_per_group: int = 4,
         min_abs_mean_diff: float = 0.5,
-        top_n: int = 15,
+        top_n: int = 12,
         direction: str = "weak_minus_strong",
     ) -> pd.DataFrame:
         work = wide_df.copy()
@@ -276,9 +257,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             how="inner",
         )
         work = work.loc[
-            work["responder_group"].isin(
-                ["Strong responder", "Weak responder"]
-            )
+            work["responder_group"].isin(["Strong responder", "Weak responder"])
         ].copy()
 
         feature_cols = [
@@ -297,10 +276,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
                 work.loc[work["responder_group"].eq("Weak responder"), col],
                 errors="coerce",
             ).dropna()
-            if (
-                len(strong) < min_present_per_group
-                or len(weak) < min_present_per_group
-            ):
+            if len(strong) < min_present_per_group or len(weak) < min_present_per_group:
                 continue
 
             mean_strong = float(strong.mean())
@@ -309,17 +285,11 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             if abs(mean_diff) < min_abs_mean_diff:
                 continue
 
-            var_strong = (
-                float(strong.var(ddof=1)) if len(strong) > 1 else float("nan")
-            )
-            var_weak = (
-                float(weak.var(ddof=1)) if len(weak) > 1 else float("nan")
-            )
+            var_strong = float(strong.var(ddof=1)) if len(strong) > 1 else float("nan")
+            var_weak = float(weak.var(ddof=1)) if len(weak) > 1 else float("nan")
             pooled_sd = float("nan")
             if not math.isnan(var_strong) and not math.isnan(var_weak):
-                pooled_num = (len(strong) - 1) * var_strong + (
-                    len(weak) - 1
-                ) * var_weak
+                pooled_num = (len(strong) - 1) * var_strong + (len(weak) - 1) * var_weak
                 pooled_den = max(len(strong) + len(weak) - 2, 1)
                 if pooled_num > 0:
                     pooled_sd = math.sqrt(pooled_num / pooled_den)
@@ -370,24 +340,18 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         mutation_status_df: pd.DataFrame,
         *,
         group_assignments: pd.DataFrame,
-        top_n: int = 15,
+        top_n: int = 12,
         direction: str = "weak_minus_strong",
     ) -> pd.DataFrame:
         grouped = group_assignments.loc[
-            group_assignments["responder_group"].isin(
-                ["Strong responder", "Weak responder"]
-            ),
+            group_assignments["responder_group"].isin(["Strong responder", "Weak responder"]),
             ["model_id", "responder_group"],
         ].copy()
         if grouped.empty:
             return pd.DataFrame()
 
-        n_strong_total = int(
-            grouped["responder_group"].eq("Strong responder").sum()
-        )
-        n_weak_total = int(
-            grouped["responder_group"].eq("Weak responder").sum()
-        )
+        n_strong_total = int(grouped["responder_group"].eq("Strong responder").sum())
+        n_weak_total = int(grouped["responder_group"].eq("Weak responder").sum())
 
         merged = mutation_status_df.merge(grouped, on="model_id", how="inner")
         if merged.empty:
@@ -403,13 +367,9 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             if column not in counts.columns:
                 counts[column] = 0
 
-        counts["strong_freq"] = counts["Strong responder"] / max(
-            n_strong_total, 1
-        )
+        counts["strong_freq"] = counts["Strong responder"] / max(n_strong_total, 1)
         counts["weak_freq"] = counts["Weak responder"] / max(n_weak_total, 1)
-        counts["weak_minus_strong_freq"] = (
-            counts["weak_freq"] - counts["strong_freq"]
-        )
+        counts["weak_minus_strong_freq"] = counts["weak_freq"] - counts["strong_freq"]
         counts = counts.loc[
             (counts["Strong responder"] >= 3) | (counts["Weak responder"] >= 3)
         ].copy()
@@ -424,13 +384,11 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         proteomics_df: pd.DataFrame,
         *,
         group_assignments: pd.DataFrame,
-        top_n: int = 15,
+        top_n: int = 12,
         direction: str = "weak_minus_strong",
     ) -> pd.DataFrame:
         grouped = group_assignments.loc[
-            group_assignments["responder_group"].isin(
-                ["Strong responder", "Weak responder"]
-            ),
+            group_assignments["responder_group"].isin(["Strong responder", "Weak responder"]),
             ["model_id", "responder_group"],
         ].copy()
         merged = proteomics_df.merge(grouped, on="model_id", how="inner")
@@ -469,22 +427,17 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             & (wide["n_obs_Weak responder"] >= 4)
         ].copy()
         wide["mean_diff_weak_minus_strong"] = (
-            wide["mean_abundance_Weak responder"]
-            - wide["mean_abundance_Strong responder"]
+            wide["mean_abundance_Weak responder"] - wide["mean_abundance_Strong responder"]
         )
         ascending = direction != "weak_minus_strong"
         return (
-            wide.sort_values(
-                "mean_diff_weak_minus_strong", ascending=ascending
-            )
+            wide.sort_values("mean_diff_weak_minus_strong", ascending=ascending)
             .head(top_n)
             .reset_index(drop=True)
         )
 
     def plot_lineage_ranking(lineage_summary: pd.DataFrame):
-        plot_df = lineage_summary.sort_values(
-            "median_growth_fraction", ascending=False
-        )
+        plot_df = lineage_summary.sort_values("median_growth_fraction", ascending=False)
         fig, ax = plt.subplots(figsize=(10, max(5, 0.38 * len(plot_df))))
         colors = [
             "#b2182b" if group == "AML" else "#4c78a8"
@@ -500,10 +453,8 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             plot_df["median_growth_fraction"],
             plot_df["analysis_group"],
             xerr=[
-                plot_df["median_growth_fraction"]
-                - plot_df["q1_growth_fraction"],
-                plot_df["q3_growth_fraction"]
-                - plot_df["median_growth_fraction"],
+                plot_df["median_growth_fraction"] - plot_df["q1_growth_fraction"],
+                plot_df["q3_growth_fraction"] - plot_df["median_growth_fraction"],
             ],
             fmt="none",
             ecolor="black",
@@ -522,13 +473,11 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             f"Median growth fraction at {TOP_DOSE_UM:g} µM (lower = more sensitive)"
         )
         ax.set_ylabel("")
-        ax.set_title("Lineage ranking at the informative top dose")
+        ax.set_title("Lineage comparison using the 2 µM endpoint")
         return fig
 
     def plot_aml_waterfall(aml_grouped_df: pd.DataFrame):
-        plot_df = aml_grouped_df.sort_values("growth_fraction").reset_index(
-            drop=True
-        )
+        plot_df = aml_grouped_df.sort_values("growth_fraction").reset_index(drop=True)
         color_map = {
             "Strong responder": "#b2182b",
             "Middle": "#bdbdbd",
@@ -549,7 +498,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         )
         ax.set_xlabel("AML models, sorted by 2 µM growth fraction")
         ax.set_ylabel(f"Growth fraction at {TOP_DOSE_UM:g} µM")
-        ax.set_title("AML spans a broad response range at the top dose")
+        ax.set_title("AML spans a broad response range at the 2 µM endpoint")
         ax.set_xticks([])
         return fig
 
@@ -568,13 +517,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         rng = np.random.default_rng(7)
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-
-        axes[0].hist(
-            plot_df["growth_fraction"],
-            bins=10,
-            color="#7f7f7f",
-            edgecolor="white",
-        )
+        axes[0].hist(plot_df["growth_fraction"], bins=10, color="#7f7f7f", edgecolor="white")
         axes[0].axvline(
             plot_df["growth_fraction"].median(),
             color="black",
@@ -586,9 +529,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
         axes[0].set_title("AML distribution at 2 µM")
 
         for group, sub in plot_df.groupby("responder_group"):
-            xs = np.full(len(sub), x_positions[group]) + rng.uniform(
-                -0.11, 0.11, len(sub)
-            )
+            xs = np.full(len(sub), x_positions[group]) + rng.uniform(-0.11, 0.11, len(sub))
             axes[1].scatter(
                 xs,
                 sub["growth_fraction"],
@@ -599,16 +540,13 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             )
             axes[1].plot(
                 [x_positions[group] - 0.2, x_positions[group] + 0.2],
-                [
-                    sub["growth_fraction"].median(),
-                    sub["growth_fraction"].median(),
-                ],
+                [sub["growth_fraction"].median(), sub["growth_fraction"].median()],
                 color="black",
                 linewidth=2,
             )
         axes[1].set_xticks([0, 1, 2], ["Strong", "Middle", "Weak"])
         axes[1].set_ylabel(f"Growth fraction at {TOP_DOSE_UM:g} µM")
-        axes[1].set_title("Responder grouping used for feature scans")
+        axes[1].set_title("Strong/weak tails used for endpoint feature scans")
         return fig
 
     def plot_top_dose_vs_auc(aml_model_summary: pd.DataFrame):
@@ -621,9 +559,7 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             alpha=0.8,
             s=55,
         )
-        for row in plot_df.nsmallest(5, "growth_fraction").itertuples(
-            index=False
-        ):
+        for row in plot_df.nsmallest(5, "growth_fraction").itertuples(index=False):
             ax.annotate(
                 row.cell_line_name,
                 (row.growth_fraction, row.auc),
@@ -633,19 +569,51 @@ def _(AML_DISEASE, TOP_DOSE_UM, math, np, pd, plt):
             )
         ax.set_xlabel(f"Growth fraction at {TOP_DOSE_UM:g} µM")
         ax.set_ylabel("Fitted AUC (secondary context)")
-        ax.set_title(
-            "AUC broadly tracks 2 µM response, but is not the main readout"
+        ax.set_title("AUC broadly tracks the endpoint ordering, but is not the main readout")
+        return fig
+
+    def plot_group_dose_curves(dose_df: pd.DataFrame):
+        summary = (
+            dose_df.groupby(["aml_status", "dose_um"], as_index=False)
+            .agg(
+                median_growth_fraction=("growth_fraction", "median"),
+                q1_growth_fraction=("growth_fraction", lambda x: x.quantile(0.25)),
+                q3_growth_fraction=("growth_fraction", lambda x: x.quantile(0.75)),
+            )
+            .sort_values(["aml_status", "dose_um"])
         )
+        fig, ax = plt.subplots(figsize=(8, 5))
+        palette = {"AML": "#b2182b", "Non-AML": "#4c78a8"}
+        for label, sub in summary.groupby("aml_status"):
+            ax.plot(
+                sub["dose_um"],
+                sub["median_growth_fraction"],
+                marker="o",
+                linewidth=2,
+                label=label,
+                color=palette[label],
+            )
+            ax.fill_between(
+                sub["dose_um"],
+                sub["q1_growth_fraction"],
+                sub["q3_growth_fraction"],
+                alpha=0.18,
+                color=palette[label],
+            )
+        ax.set_xscale("log")
+        ax.set_xlabel("Dose (µM, log scale)")
+        ax.set_ylabel("Growth fraction")
+        ax.set_title("Dose-series context only: AML trends lower at the high end")
+        ax.legend(frameon=True)
         return fig
 
     return (
-        RESPONSE_META_COLS,
         add_analysis_labels,
         assign_aml_responder_groups,
         build_aml_model_summary,
-        build_top_dose_group_summary,
         plot_aml_distribution,
         plot_aml_waterfall,
+        plot_group_dose_curves,
         plot_lineage_ranking,
         plot_top_dose_vs_auc,
         scan_mutation_status,
@@ -677,12 +645,11 @@ def _(
         "gene_effects_wide",
         "model_gene_mutation_status",
     ]
-    optional_tables = ["protein_expression_ms_wide", "protein_features"]
 
     tables = prepare_lazy_tables(
         output_dir=POLARS_DIR,
         db_path=DB_PATH,
-        tables=required_tables + optional_tables,
+        tables=required_tables,
     )
 
     model_cols = [
@@ -702,34 +669,21 @@ def _(
     )
     responses = add_analysis_labels(responses)
 
-    screen_dose_levels = (
+    doses = (
         tables["drug_response_secondary_dose"]
         .filter(pl.col("screen_id") == SCREEN_ID)
-        .select("dose_um")
-        .unique()
-        .sort("dose_um")
-        .collect()
-        .to_pandas()["dose_um"]
-        .tolist()
-    )
-
-    top_dose = (
-        tables["drug_response_secondary_dose"]
-        .filter(
-            (pl.col("screen_id") == SCREEN_ID)
-            & (pl.col("dose_um") == TOP_DOSE_UM)
-        )
         .join(tables["models"].select(model_cols), on="model_id", how="left")
         .with_columns((2 ** pl.col("median_l2fc")).alias("growth_fraction"))
         .collect()
         .to_pandas()
     )
-    top_dose = add_analysis_labels(top_dose)
+    doses = add_analysis_labels(doses)
+
+    screen_dose_levels = sorted(doses["dose_um"].dropna().unique().tolist())
+    top_dose = doses.loc[doses["dose_um"].eq(TOP_DOSE_UM)].copy()
 
     aml_model_ids = (
-        top_dose.loc[
-            top_dose["oncotree_primary_disease"].eq(AML_DISEASE), "model_id"
-        ]
+        top_dose.loc[top_dose["oncotree_primary_disease"].eq(AML_DISEASE), "model_id"]
         .drop_duplicates()
         .tolist()
     )
@@ -770,6 +724,7 @@ def _(
             "rows": len(mutation_status_df),
         },
     ]
+
     proteomics_df = None
     try:
         proteomics_lazy = prepare_lazy_datasets(
@@ -789,7 +744,7 @@ def _(
                 "rows": len(proteomics_df),
             }
         )
-    except Exception as exc:  # pragma: no cover - notebook fallback path
+    except Exception as exc:  # pragma: no cover - notebook fallback
         dataset_status.append(
             {
                 "surface": "proteomics_long",
@@ -802,6 +757,7 @@ def _(
     return (
         dataset_status_df,
         dependency_df,
+        doses,
         expression_df,
         mutation_status_df,
         proteomics_df,
@@ -814,6 +770,7 @@ def _(
 @app.cell
 def _(
     AML_DISEASE,
+    DB_PATH,
     TOP_DOSE_UM,
     dataset_status_df,
     mo,
@@ -829,14 +786,16 @@ def _(
         f"""
         ## Data coverage
 
-        - Screen: **`{responses["screen_id"].dropna().iloc[0]}`**
+        - Screen: **`{responses['screen_id'].dropna().iloc[0]}`**
+        - DuckDB source: **`{DB_PATH}`**
         - Response rows in screen: **{len(responses):,}**
         - Models with fitted AUC available: **{fitted_n:,}**
         - AML models in screen: **{aml_models}**
-        - Top dose used for phase-1 ranking: **{TOP_DOSE_UM:g} µM**
-        - All available doses in the screen: **{", ".join(f"{x:.6g}" for x in screen_dose_levels)}**
+        - Primary endpoint used here: **{TOP_DOSE_UM:g} µM growth fraction**
+        - All dose levels in the screen: **{", ".join(f"{x:.6g}" for x in screen_dose_levels)}**
 
-        Supporting surfaces for the feature scan are summarized below.
+        The large spacing between **0.6667 and 2.0 µM** is why the notebook avoids curve-class inference.
+        Supporting molecular surfaces for the AML feature scan are listed below.
         """
     )
     dataset_status_df
@@ -844,12 +803,21 @@ def _(
 
 
 @app.cell
-def _(
-    min_lineage_n,
-    responses,
-    summarize_lineages_at_top_dose,
-    top_dose,
-):
+def _(doses, mo, plot_group_dose_curves):
+    mo.md("## Dose-series context (descriptive only)")
+    mo.vstack(
+        [
+            mo.md(
+                "The dose curves below are useful context, but the endpoint notebook does **not** treat the apparent high-dose transition shape as reliably localised because the final dose step is too wide."
+            ),
+            plot_group_dose_curves(doses),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(min_lineage_n, responses, summarize_lineages_at_top_dose, top_dose):
     lineage_summary = summarize_lineages_at_top_dose(
         top_dose,
         responses,
@@ -872,13 +840,11 @@ def _(
 @app.cell
 def _(aml_vs_rest, lineage_summary, mo, plot_lineage_ranking):
     lineage_plot = plot_lineage_ranking(lineage_summary)
-    mo.md("## 1. Is AML more sensitive than other lineages at 2 µM?")
+    mo.md("## 1. Is AML sensitive at the 2 µM endpoint?")
     mo.vstack(
         [
             mo.md(
-                "The ranking below uses **median 2 µM growth fraction** as the primary metric. "
-                "Lower values indicate stronger inhibition at the informative top dose. "
-                "Median fitted AUC is kept in the table only as a secondary cross-check."
+                "This ranking uses **median 2 µM growth fraction** as the primary statistic. Lower values indicate stronger inhibition. AUC is reported only as a cross-check, not as the language of the main claim."
             ),
             aml_vs_rest,
             lineage_summary,
@@ -891,7 +857,9 @@ def _(aml_vs_rest, lineage_summary, mo, plot_lineage_ranking):
 @app.cell
 def _(
     AML_DISEASE,
+    assign_aml_responder_groups,
     build_aml_model_summary,
+    mo,
     plot_aml_distribution,
     plot_aml_waterfall,
     plot_top_dose_vs_auc,
@@ -899,12 +867,8 @@ def _(
     responses,
     summarize_responder_groups,
     top_dose,
-    assign_aml_responder_groups,
-    mo,
 ):
-    aml_top_dose = top_dose.loc[
-        top_dose["oncotree_primary_disease"].eq(AML_DISEASE)
-    ].copy()
+    aml_top_dose = top_dose.loc[top_dose["oncotree_primary_disease"].eq(AML_DISEASE)].copy()
     aml_responses = responses.loc[
         responses["oncotree_primary_disease"].eq(AML_DISEASE)
     ].copy()
@@ -917,29 +881,23 @@ def _(
     responder_summary = summarize_responder_groups(aml_grouped, aml_responses)
     aml_model_summary = build_aml_model_summary(aml_grouped, aml_responses)
 
-    aml_waterfall = plot_aml_waterfall(aml_grouped)
-    aml_distribution = plot_aml_distribution(aml_grouped)
-    aml_auc_context = plot_top_dose_vs_auc(aml_model_summary)
-
-    mo.md("## 2. Is AML internally heterogeneous at 2 µM?")
+    mo.md("## 2. Is AML heterogeneous at 2 µM?")
     mo.vstack(
         [
             mo.md(
-                f"AML models are grouped descriptively using the bottom and top **{responder_tail_pct.value}%** "
-                "of the 2 µM distribution. This is just a practical phase-1 split for feature discovery, "
-                "not a final responder definition."
+                f"The strong and weak AML tails below are a **descriptive endpoint split** using the bottom and top **{responder_tail_pct.value}%** of the AML 2 µM distribution. This is suitable for hypothesis generation, not for claiming a final clinical threshold."
             ),
             mo.md(
                 f"- Strong responder cutoff: growth fraction ≤ **{responder_cutoffs['strong_max_growth_fraction']:.3f}**\n"
                 f"- Weak responder cutoff: growth fraction ≥ **{responder_cutoffs['weak_min_growth_fraction']:.3f}**"
             ),
             responder_summary,
-            aml_waterfall,
-            aml_distribution,
+            plot_aml_waterfall(aml_grouped),
+            plot_aml_distribution(aml_grouped),
             mo.md(
-                "AUC still broadly agrees with the top-dose ordering, but the notebook keeps 2 µM as the main lens because that is the most directly informative point in this undersampled dose series."
+                "AUC broadly tracks the endpoint ordering, but that agreement is treated as reassurance rather than as the main biological framing."
             ),
-            aml_auc_context,
+            plot_top_dose_vs_auc(aml_model_summary),
             aml_model_summary[
                 [
                     "cell_line_name",
@@ -968,9 +926,7 @@ def _(
     scan_wide_feature_table,
 ):
     strong_weak_assignments = aml_grouped.loc[
-        aml_grouped["responder_group"].isin(
-            ["Strong responder", "Weak responder"]
-        )
+        aml_grouped["responder_group"].isin(["Strong responder", "Weak responder"])
     ].copy()
 
     expression_meta_cols = [
@@ -1076,30 +1032,19 @@ def _(
     proteomics_higher_in_weak,
     strong_weak_assignments,
 ):
-    mo.md(
-        "## 3. What candidate molecular features separate strong from weak AML responders?"
-    )
+    mo.md("## 3. Endpoint-linked AML feature scan")
 
     blocks = [
         mo.md(
-            f"These are **first-pass descriptive comparisons** between **{len(strong_weak_assignments)}** AML models in the strong/weak tails of the 2 µM distribution. "
-            "They are useful for prioritization, not for claiming validated biomarkers. Sample sizes are especially limited for dependency and proteomics coverage."
+            f"These are **descriptive 2 µM responder-tail comparisons** across **{len(strong_weak_assignments)}** AML models. They are useful for prioritising follow-up biology, but the notebook does **not** present them as validated biomarkers."
         ),
         mo.md("### Expression features higher in weaker AML responders"),
         expression_higher_in_weak,
         mo.md("### Expression features higher in stronger AML responders"),
         expression_higher_in_strong,
-        mo.md("### Dependency features that look stronger in weak responders"),
-        mo.md(
-            "More positive values in the table below mean the weak-responder group is **less dependent** on that gene than the strong-responder group."
-        ),
+        mo.md("### Dependency features shifted in weaker AML responders"),
         dependency_higher_in_weak,
-        mo.md(
-            "### Dependency features that look stronger in strong responders"
-        ),
-        mo.md(
-            "More negative values here point to genes that are **more essential in weak responders** than in strong responders."
-        ),
+        mo.md("### Dependency features shifted in stronger AML responders"),
         dependency_higher_in_strong,
         mo.md("### Mutations enriched in weaker AML responders"),
         mutation_enriched_in_weak,
@@ -1119,7 +1064,7 @@ def _(
     else:
         blocks.append(
             mo.md(
-                "### Proteomics\n`proteomics_long` was not available in this environment, so the proteomics comparison is skipped."
+                "### Proteomics\n`proteomics_long` was unavailable here, so proteomics is omitted rather than inferred indirectly."
             )
         )
 
@@ -1128,22 +1073,17 @@ def _(
 
 
 @app.cell
-def _(
-    AML_DISEASE,
-    aml_model_summary,
-    lineage_summary,
-    mo,
-    mutation_enriched_in_weak,
-    responder_summary,
-):
+def _(lineage_summary, mo, mutation_enriched_in_weak, responder_summary):
     aml_lineage_row = lineage_summary.loc[
         lineage_summary["analysis_group"].eq("AML")
     ].iloc[0]
-    best_mutation_text = "none with the current filters"
+
+    best_mutation_text = "none under the current filters"
     if len(mutation_enriched_in_weak) > 0:
         top_gene = mutation_enriched_in_weak.iloc[0]
         best_mutation_text = (
-            f"{top_gene['gene_symbol']} ({top_gene['Weak responder']}/{int(responder_summary.loc[responder_summary['responder_group'].eq('Weak responder'), 'n_models'].iloc[0])} weak vs "
+            f"{top_gene['gene_symbol']} "
+            f"({top_gene['Weak responder']}/{int(responder_summary.loc[responder_summary['responder_group'].eq('Weak responder'), 'n_models'].iloc[0])} weak vs "
             f"{top_gene['Strong responder']}/{int(responder_summary.loc[responder_summary['responder_group'].eq('Strong responder'), 'n_models'].iloc[0])} strong)"
         )
 
@@ -1160,28 +1100,23 @@ def _(
 
     mo.md(
         f"""
-        ## Provisional phase-1 takeaways
+        ## What survives the endpoint reframing
 
-        1. **AML is among the more sensitive groups at the informative top dose.**
-           In the lineage ranking, AML median growth fraction at 2 µM is **{median_aml_growth:.3f}**. Median AUC is **{median_aml_auc:.3f}**, which supports the same overall direction but is kept as secondary context.
+        1. **Retained: AML is one of the more sensitive groups at 2 µM.**  
+           AML median 2 µM growth fraction is **{median_aml_growth:.3f}**. Median AUC is **{median_aml_auc:.3f}**, but that is secondary context rather than the main lens.
 
-        2. **AML is clearly heterogeneous at 2 µM.**
-           The strong and weak AML tails are well separated (**{median_strong:.3f}** vs **{median_weak:.3f}** median growth fraction), and the AML waterfall spans from deep inhibition to little or no inhibition.
+        2. **Retained: AML is clearly heterogeneous at 2 µM.**  
+           The strong and weak AML tails remain well separated (**{median_strong:.3f}** vs **{median_weak:.3f}** median growth fraction), so the endpoint assay still supports real within-AML spread.
 
-        3. **The feature scan is good enough to generate candidates, not conclusions.**
-           Expression, dependency, mutation, and proteomics surfaces can all be queried against the strong-vs-weak split. The most obvious mutation-side weak-responder candidate under the current filters is **{best_mutation_text}**.
+        3. **Retained but still preliminary: endpoint-linked feature tables can nominate candidates.**  
+           Under the current filters, the clearest mutation-side weak-responder signal is **{best_mutation_text}**.
 
-        4. **What this notebook deliberately does *not* claim:**
-           It does not make strong statements about transition dose, fine-grained curve shape, or mechanistic slope differences across AML. With this dose spacing, that would be more confident than the data justify.
+        4. **Explicitly weakened versus older curve-first framing:**  
+           This notebook does **not** claim a reliable transition dose, cliff location, or AML-specific curve class. The gap from **0.6667 to 2.0 µM** is too large for that level of inference.
 
-        Good next steps are straightforward: repeat the 2 µM-centric comparison in additional screens, add AML subtype annotations explicitly, and treat the feature tables here as a shortlist for follow-up rather than a finished biomarker model.
+        In short: the **2 µM endpoint signal in AML is robust enough to keep**, but the **fine-grained dose-response interpretation is intentionally demoted**.
         """
     )
-    return
-
-
-@app.cell
-def _():
     return
 
 
