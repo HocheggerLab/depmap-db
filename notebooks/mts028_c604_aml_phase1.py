@@ -26,6 +26,7 @@ def _():
     plt.style.use("seaborn-v0_8-whitegrid")
     return (
         PROJECT_ROOT,
+        Path,
         math,
         mo,
         np,
@@ -67,8 +68,7 @@ def _(mo):
 
 
 @app.cell
-def _(PROJECT_ROOT, mo):
-    from pathlib import Path
+def _(PROJECT_ROOT, Path, mo):
 
     SCREEN_ID = "MTS028_BIAS_CORRECTED"
     AML_DISEASE = "Acute Myeloid Leukemia"
@@ -911,7 +911,7 @@ def _(
             ],
         ]
     )
-    return aml_grouped, aml_model_summary, responder_summary
+    return aml_grouped, responder_summary
 
 
 @app.cell
@@ -1102,16 +1102,16 @@ def _(lineage_summary, mo, mutation_enriched_in_weak, responder_summary):
         f"""
         ## What survives the endpoint reframing
 
-        1. **Retained: AML is one of the more sensitive groups at 2 µM.**  
+        1. **Retained: AML is one of the more sensitive groups at 2 µM.**
            AML median 2 µM growth fraction is **{median_aml_growth:.3f}**. Median AUC is **{median_aml_auc:.3f}**, but that is secondary context rather than the main lens.
 
-        2. **Retained: AML is clearly heterogeneous at 2 µM.**  
+        2. **Retained: AML is clearly heterogeneous at 2 µM.**
            The strong and weak AML tails remain well separated (**{median_strong:.3f}** vs **{median_weak:.3f}** median growth fraction), so the endpoint assay still supports real within-AML spread.
 
-        3. **Retained but still preliminary: endpoint-linked feature tables can nominate candidates.**  
+        3. **Retained but still preliminary: endpoint-linked feature tables can nominate candidates.**
            Under the current filters, the clearest mutation-side weak-responder signal is **{best_mutation_text}**.
 
-        4. **Explicitly weakened versus older curve-first framing:**  
+        4. **Explicitly weakened versus older curve-first framing:**
            This notebook does **not** claim a reliable transition dose, cliff location, or AML-specific curve class. The gap from **0.6667 to 2.0 µM** is too large for that level of inference.
 
         In short: the **2 µM endpoint signal in AML is robust enough to keep**, but the **fine-grained dose-response interpretation is intentionally demoted**.

@@ -6,16 +6,11 @@ app = marimo.App(width="wide")
 
 @app.cell
 def _():
-    return
-
-
-@app.cell
-def _():
     from depmap_db import scan_models, scan_mutation_events
 
     # Direct from DuckDB → Polars LazyFrame, always current data
-    models = scan_models(db_path="../data/depmap.duckdb")
-    events = scan_mutation_events(db_path="../data/depmap.duckdb")
+    models = scan_models()
+    events = scan_mutation_events()
     return (models,)
 
 
@@ -85,7 +80,7 @@ def _(PROJECT_ROOT, mo):
         label="Minimum group size for lineage comparison",
     )
     mo.hstack([min_lineage_n], justify="start")
-    return AML_DISEASE, DB_PATH, POLARS_DIR, SCREEN_ID, min_lineage_n
+    return AML_DISEASE, POLARS_DIR, SCREEN_ID, min_lineage_n
 
 
 @app.cell
@@ -370,17 +365,9 @@ def _(AML_DISEASE, np, pd, plt):
 
 
 @app.cell
-def _(
-    DB_PATH,
-    POLARS_DIR,
-    SCREEN_ID,
-    add_analysis_labels,
-    pl,
-    prepare_lazy_tables,
-):
+def _(POLARS_DIR, SCREEN_ID, add_analysis_labels, pl, prepare_lazy_tables):
     tables = prepare_lazy_tables(
         output_dir=POLARS_DIR,
-        db_path=DB_PATH,
         tables=[
             "models",
             "drug_response_secondary",
@@ -634,6 +621,11 @@ def _(AML_DISEASE, curve_features, mo, responses):
         Good next steps would be AML subtype stratification, integration with genomic features, and replicate-aware sensitivity modeling.
         """
     )
+    return
+
+
+@app.cell
+def _():
     return
 
 

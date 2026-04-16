@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.21.1"
+__generated_with = "0.20.4"
 app = marimo.App(width="wide")
 
 
@@ -44,13 +44,11 @@ def _():
         "expression": "RNA expression",
         "proteomics": "Gygi MS proteomics",
     }
-
     return (
         AML_DISEASE,
         DB_PATH,
         MODALITY_LABELS,
         POLARS_DIR,
-        PROJECT_ROOT,
         TARGET_GENES,
         mo,
         np,
@@ -64,29 +62,27 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # AML as a class in the Greatwall/B55 axis
+    mo.md(r"""
+    # AML as a class in the Greatwall/B55 axis
 
-        This notebook asks a narrower, more class-level question than the first AML responder notebook:
+    This notebook asks a narrower, more class-level question than the first AML responder notebook:
 
-        **Does AML stand out relative to other tumour groups in the MASTL/ENSA/ARPP19/PPP2R2 axis?**
+    **Does AML stand out relative to other tumour groups in the MASTL/ENSA/ARPP19/PPP2R2 axis?**
 
-        It uses four DepMap surfaces where available:
+    It uses four DepMap surfaces where available:
 
-        - **dependency** (`gene_effects_wide`)
-        - **expression** (`gene_expression_wide`)
-        - **proteomics** (`proteomics_long`, derived from Gygi MS)
-        - **mutation** (`model_gene_mutation_status` and `mutation_events`)
+    - **dependency** (`gene_effects_wide`)
+    - **expression** (`gene_expression_wide`)
+    - **proteomics** (`proteomics_long`, derived from Gygi MS)
+    - **mutation** (`model_gene_mutation_status` and `mutation_events`)
 
-        The notebook stays deliberately descriptive and hypothesis-generating:
+    The notebook stays deliberately descriptive and hypothesis-generating:
 
-        - AML is defined as `oncotree_primary_disease == "Acute Myeloid Leukemia"`.
-        - Non-AML comparators are shown both as a pooled **non-AML** group and as **non-AML lineages**.
-        - Effects are summarized with counts, medians, and AML-minus-non-AML deltas.
-        - Sparse modalities are flagged rather than stretched into strong claims.
-        """
-    )
+    - AML is defined as `oncotree_primary_disease == "Acute Myeloid Leukemia"`.
+    - Non-AML comparators are shown both as a pooled **non-AML** group and as **non-AML lineages**.
+    - Effects are summarized with counts, medians, and AML-minus-non-AML deltas.
+    - Sparse modalities are flagged rather than stretched into strong claims.
+    """)
     return
 
 
@@ -496,7 +492,6 @@ def _(
         .groupby("aml_status", as_index=False)
         .agg(n_models=("model_id", "nunique"))
     )
-
     return (
         dependency_df,
         dependency_keep,
@@ -516,8 +511,8 @@ def _(
     DB_PATH,
     dependency_keep,
     expression_keep,
-    model_summary,
     mo,
+    model_summary,
     proteomics_df,
     proteomics_issue,
 ):
@@ -566,7 +561,7 @@ def _(
         ignore_index=True,
         sort=False,
     )
-    return dependency_long, expression_long, modality_long
+    return (modality_long,)
 
 
 @app.cell
@@ -590,7 +585,12 @@ def _(
         mutation_status_df,
         mutation_events_df,
     )
-    return binary_summary, coverage_summary, lineage_summary, mutation_axis_summary
+    return (
+        binary_summary,
+        coverage_summary,
+        lineage_summary,
+        mutation_axis_summary,
+    )
 
 
 @app.cell
@@ -623,7 +623,7 @@ def _(binary_summary, coverage_summary, mo, plot_delta_heatmap):
 
 
 @app.cell
-def _(MODALITY_LABELS, modality_long, mo):
+def _(MODALITY_LABELS, mo, modality_long):
     available_modalities = list(dict.fromkeys(modality_long["modality"].tolist()))
     modality_picker = mo.ui.dropdown(
         options={modality: MODALITY_LABELS[modality] for modality in available_modalities},
@@ -635,7 +635,7 @@ def _(MODALITY_LABELS, modality_long, mo):
 
 
 @app.cell
-def _(modality_long, modality_picker, mo, plot_binary_boxgrid):
+def _(mo, modality_long, modality_picker, plot_binary_boxgrid):
     binary_plot = plot_binary_boxgrid(modality_long, modality_picker.value)
     mo.vstack(
         [
@@ -779,17 +779,15 @@ def _(binary_summary, lineage_summary, mo, mutation_axis_summary, pd):
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        ## Practical caveats
+    mo.md(r"""
+    ## Practical caveats
 
-        1. **This is a class-level descriptive notebook, not a responder model.**
-        2. **`PPP2R2D` is absent from the current dependency wide table**, so that part of the axis is incomplete in CRISPR space.
-        3. **Proteomics is sparse and partially mapped at the isoform/accession level.** Absence of a protein here can mean assay coverage/mapping limits rather than true biological absence.
-        4. **Mutation scarcity is itself informative** for these genes in AML, but it also means mutation-based comparison is low-power.
-        5. If AML looks unusual for one feature/modality, the clean next step is to validate that specific contrast elsewhere rather than promoting a whole-axis claim immediately.
-        """
-    )
+    1. **This is a class-level descriptive notebook, not a responder model.**
+    2. **`PPP2R2D` is absent from the current dependency wide table**, so that part of the axis is incomplete in CRISPR space.
+    3. **Proteomics is sparse and partially mapped at the isoform/accession level.** Absence of a protein here can mean assay coverage/mapping limits rather than true biological absence.
+    4. **Mutation scarcity is itself informative** for these genes in AML, but it also means mutation-based comparison is low-power.
+    5. If AML looks unusual for one feature/modality, the clean next step is to validate that specific contrast elsewhere rather than promoting a whole-axis claim immediately.
+    """)
     return
 
 
