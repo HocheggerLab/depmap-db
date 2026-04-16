@@ -191,7 +191,7 @@ class DatabaseSettings(BaseModel):
     """Database configuration settings."""
 
     path: Path = Field(
-        default=Path("data/depmap.duckdb"),
+        default=Path.home() / ".depmap" / "depmap.duckdb",
         description="Path to the DuckDB database file",
     )
     memory: bool = Field(
