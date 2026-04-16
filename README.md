@@ -1,240 +1,696 @@
 # depmap-db
 
-Local DuckDB tooling for downloading, storing, and exporting DepMap datasets.
+Local DuckDB tooling for building, updating, querying, and plotting DepMap datasets.
 
-## Current design
+This repository is designed to give you a **local, reproducible DepMap workspace** that can be used in three ways:
 
-The repository treats datasets according to their natural structure:
+1. **CLI** for quick lookups and exports
+2. **Python/Polars API** for notebook analysis and custom figures
+3. **Figure API** for common plotting workflows already packaged in `depmap_db.plots`
 
-- **CRISPR gene effect** → canonical table: `gene_effects_wide` (wide matrix)
-- **Gene expression** → canonical table: `gene_expression_wide` (wide matrix)
-- **Somatic mutations** → canonical table: `mutations` (long event table) + derived `model_gene_mutation_status` (sparse)
-- **Proteomics (Gygi MS)** → canonical table: `protein_expression_ms_wide` (wide matrix) + `protein_features` UniProt→gene bridge
-- **PRISM primary repurposing** → canonical table: `drug_response_primary_wide` (compound × model wide matrix, stored as published) + `compounds` + `compound_targets`
-- **PRISM secondary repurposing** → canonical table: `drug_response_secondary` (long dose-response table with AUC/EC50/IC50 + fit terms) + `compounds` + `compound_targets` + `drug_screens`
+It is intended to be usable by a new student without needing to understand the whole codebase first.
 
-### Why wide is canonical for dependency/expression/proteomics
+---
 
-- DepMap publishes these modalities as model-by-feature matrices already.
-- The export layer and downstream analysis in this repo are wide-oriented.
-- Supporting a partial long-path for expression but a wide-path for dependency made the code harder to reason about.
-- A single canonical storage model is simpler than maintaining half-integrated wide/long toggles.
+## What this project stores
 
-For proteomics, the initial implementation targets the **DepMap Harmonized MS CCLE Gygi** matrix only (`harmonized_MS_CCLE_Gygi.csv`). The corresponding release label currently resolves to **Harmonized Public Proteomics 24Q4**, which may move on a different release track from the core DepMap release. This repo records that release label explicitly rather than assuming it matches the main DepMap quarter.
+The repository keeps each dataset in a structure close to its published form:
 
-The file is stored as-published. DepMap labels it as *harmonized*, but this repo does **not** claim a more specific normalization meaning unless DepMap documents that clearly in the source release.
+- **CRISPR gene effect** → `gene_effects_wide`
+- **Gene expression** → `gene_expression_wide`
+- **Somatic mutations** → `mutations` + derived `model_gene_mutation_status`
+- **Proteomics (Gygi MS)** → `protein_expression_ms_wide` + `protein_features`
+- **PRISM primary repurposing** → `drug_response_primary_wide` + `compounds` + `compound_targets`
+- **PRISM secondary repurposing** → `drug_response_secondary` + `compounds` + `compound_targets` + `drug_screens`
 
-Long-format projections can still be added later as **derived views or exports** if a concrete use-case needs them, but the database now has one primary storage model for both matrix datasets.
+### Why this matters
 
-### Why PRISM phase-1 uses both wide and long tables
+- Matrix-like assays such as CRISPR, expression, and proteomics are stored in **wide format**, because that is how DepMap distributes them and how most downstream analysis in this repo uses them.
+- Mutations are stored in **long/event format**, because they are naturally event-based.
+- PRISM data keeps the published primary/secondary structure rather than forcing everything into one abstraction too early.
 
-PRISM is different enough from CRISPR/expression/proteomics that phase 1 uses the published structure of each release rather than forcing everything into one drug-response abstraction immediately.
+---
 
-- **Primary repurposing matrix (`Repurposing_Public_24Q2_Extended_Primary_Data_Matrix.csv`)** is stored in `drug_response_primary_wide` in the same **compound-by-model** orientation DepMap publishes.
-- **Secondary dose-response parameters (`secondary-screen-dose-response-curve-parameters.csv`)** are stored canonically in `drug_response_secondary` as a long table.
-- **Compound metadata** lives in `compounds`.
-- **Compound→gene links** live in `compound_targets` and are explicitly provenance-aware. A row in `compound_targets` means the source metadata named that target token; it does **not** claim biochemical certainty or exclusivity.
-- **Screen metadata / release semantics** live in `drug_screens`, which lets PRISM sit on its own release tracks (`prism_primary`, `prism_secondary`) rather than pretending it always matches the core DepMap quarterly release.
+## Repository layout
 
-For secondary-screen analyses, this repo keeps multiple response measures but recommends **AUC** as the default summary metric in phase 1 because it is usually more stable than leaning on a single fitted concentration summary alone. EC50, IC50, slope, upper/lower limits, and fit quality are still preserved.
+```text
+src/depmap_db/         Python package
+src/depmap_db/cli.py   Command-line interface
+src/depmap_db/plots/   Figure API for common analysis plots
+data/                  DuckDB database, cache, exported snapshots
+notebooks/             Notebook work
+reports/               Reports and exported outputs
+tests/                 Test suite
+```
 
-### Why long is canonical for mutations
+Important default paths:
 
-- Mutations are naturally event-based (MAF-like) with variable numbers of events per model-gene pair.
-- The `mutations` table preserves all source annotation columns for filtering and interpretation.
-- The derived `model_gene_mutation_status` table provides a sparse model-gene mutation indicator for joining to wide dependency/expression tables.
+- Database: `data/depmap.duckdb`
+- Download cache: `data/cache/`
+- Polars snapshots: `data/polars/`
+- Logs: `logs/`
 
-## Install
+---
+
+# 1. Setup and installation
+
+## Prerequisites
+
+You need:
+
+- **Python 3.13+**
+- **uv** for environment and dependency management
+
+If `uv` is not installed yet:
 
 ```bash
-git clone <repo>
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Or see the official uv installation instructions.
+
+## Clone and install
+
+```bash
+git clone <repo-url>
 cd depmap-db
 uv venv
 source .venv/bin/activate
 uv sync
 ```
 
-## CLI
+This installs the CLI entry point `depmap-db` and the Python package `depmap_db` into the virtual environment.
 
-### Initialize the database
+## Configuration
+
+A template config file is included as `.env.template`.
+
+Recommended first step:
+
+```bash
+cp .env.template .env
+```
+
+The defaults are sensible for local use. The most important settings are:
+
+```env
+DEPMAP_DATABASE__PATH=data/depmap.duckdb
+DEPMAP_DEPMAP__CACHE_DIR=data/cache
+DEPMAP_DEPMAP__RELEASE_LABEL=DepMap Public 25Q3
+```
+
+If you keep the defaults, the repository stays self-contained and all local data lives under `data/`.
+
+---
+
+# 2. First-time setup: from empty repo to working database
+
+For a new student, the safest first build sequence is:
+
+## Step 1 — Activate the environment
+
+```bash
+cd depmap-db
+source .venv/bin/activate
+```
+
+## Step 2 — Initialize the DuckDB schema
 
 ```bash
 depmap-db init
 ```
 
-### Download phase-1 datasets
+This creates the empty database schema.
+
+## Step 3 — Download the default phase-1 datasets
 
 ```bash
 depmap-db download
 ```
 
-### Download and load datasets
+This downloads the default supported dataset set into the cache.
+
+## Step 4 — Load downloaded data into the database
+
+The easiest route is to combine downloading and loading in one command:
 
 ```bash
-depmap-db download --datasets Model --datasets Gene --load-data
+depmap-db download --load-data
 ```
 
-### Load a local folder of CSVs
+If you already downloaded the files previously, load them from the cache folder instead:
 
 ```bash
-depmap-db load-folder --folder /path/to/depmap/csvs
+depmap-db load-folder --folder data/cache
 ```
 
-### Load PRISM phase-1 datasets
+## Step 5 — Check that the database looks healthy
 
 ```bash
-# download the primary matrix + secondary dose-response table
-# release labels are tracked explicitly per PRISM dataset
+depmap-db status
+```
 
+This should show:
+
+- database path
+- schema version
+- release tracking information (if refresh has been used)
+- available tables and row counts
+
+---
+
+# 3. Data download and refresh procedures
+
+This is the section most students will actually need.
+
+## A. Fresh download for a new machine
+
+Use this when setting up from scratch:
+
+```bash
+depmap-db init
+depmap-db download --load-data
+depmap-db status
+```
+
+## B. Download only specific datasets
+
+Use this when you only need a subset:
+
+```bash
 depmap-db download \
-  --datasets PRISMPrimaryRepurposingExtended \
-  --datasets PRISMSecondaryDoseResponseCurveParameters
-
-# load a local folder that contains the PRISM files
-# if the primary compound list sits next to the primary matrix,
-# it will also be used to populate compound metadata + source target strings
-
-depmap-db load-folder --folder /path/to/depmap/prism/files
+  --datasets Model \
+  --datasets Gene \
+  --datasets CRISPRGeneEffect \
+  --load-data
 ```
 
-### Gene-level query helpers
+## C. Load a folder of already-downloaded CSV files
 
-The first query-oriented CLI layer is intentionally small and composable:
+Use this when you have files from DepMap or a collaborator on disk already:
 
 ```bash
-# Which lineages are most dependent on HAPSTR1?
-depmap-db gene dependency-summary HAPSTR1 --group-by lineage --limit 10
-
-# Same idea, grouped by primary disease instead
-depmap-db gene dependency-summary HAPSTR1 --group-by disease --limit 10
-
-# Export per-model dependency values for MASTL in breast models
-depmap-db gene dependency-models MASTL --lineage Breast --output mastl_breast.csv
-
-# Summarise expression by lineage for a gene
-depmap-db gene expression-summary HAPSTR1 --group-by lineage --limit 10
-
-# Inspect Gygi MS bridge coverage
-# shows how many UniProt accessions map to gene symbols / local genes
-# and reports the proteomics release label tracked for the dataset
-
-depmap-db protein mapping-summary
-
-# Search the Gygi protein bridge by accession, gene symbol, or protein label
-
-depmap-db protein search RBM47
-
-# Summarise Gygi MS abundance by lineage for one protein accession
-
-depmap-db protein expression-summary A0AV96 --group-by lineage --limit 10
+depmap-db load-folder --folder /path/to/depmap/files
 ```
 
-`dependency-models` can also print to stdout in table, CSV, or JSON format via `--format`.
+You can also force a reload:
 
-### Plan or apply a refresh
+```bash
+depmap-db load-folder --folder /path/to/depmap/files --force
+```
 
-`refresh` now has a first clean abstraction point for repeatable updates:
+## D. Plan a release refresh without changing anything
 
-- a configured **release label** (`DEPMAP_DEPMAP__RELEASE_LABEL`)
-- a persisted **release tracking file**
-- a refresh planner that decides which datasets are already cached for the tracked release
-
-Plan only:
+Use this first if you want to see what would happen:
 
 ```bash
 depmap-db refresh --datasets Model --datasets Gene
 ```
 
-Apply the refresh plan:
+That gives a refresh plan only.
+
+## E. Apply a release refresh
+
+Use this when the configured release label has changed and you want to update local data:
 
 ```bash
+depmap-db refresh \
+  --datasets Model \
+  --datasets Gene \
+  --apply \
+  --load-data
+```
+
+If you want to force reload the refreshed data into DuckDB:
+
+```bash
+depmap-db refresh \
+  --datasets Model \
+  --datasets Gene \
+  --apply \
+  --load-data \
+  --force
+```
+
+## Recommended update workflow
+
+For routine maintenance:
+
+1. Update `DEPMAP_DEPMAP__RELEASE_LABEL` in `.env` when moving to a new DepMap release.
+2. Check the plan first:
+   ```bash
+   depmap-db refresh --datasets Model --datasets Gene
+   ```
+3. Apply the refresh:
+   ```bash
+   depmap-db refresh --datasets Model --datasets Gene --apply --load-data
+   ```
+4. Verify the result:
+   ```bash
+   depmap-db status
+   ```
+
+## PRISM-specific download example
+
+```bash
+depmap-db download \
+  --datasets PRISMPrimaryRepurposingExtended \
+  --datasets PRISMSecondaryDoseResponseCurveParameters
+```
+
+Then load local PRISM files:
+
+```bash
+depmap-db load-folder --folder /path/to/depmap/prism/files
+```
+
+---
+
+# 4. Quick-start command cheat sheet
+
+```bash
+# initialise database
+depmap-db init
+
+# see database status
+depmap-db status
+
+# download default datasets
+depmap-db download
+
+# download and load into the database
+depmap-db download --load-data
+
+# load local files
+depmap-db load-folder --folder /path/to/files
+
+# plan a refresh
+depmap-db refresh --datasets Model --datasets Gene
+
+# apply a refresh
 depmap-db refresh --datasets Model --datasets Gene --apply --load-data
+
+# run a gene dependency summary
+depmap-db gene dependency-summary HAPSTR1 --group-by lineage --limit 10
+
+# inspect mutations in one model
+depmap-db model mutations DLD-1 --gene KRAS
+
+# export a dataset
+depmap-db export -o matched --data-type joint
 ```
 
-## Practical update strategy
+---
 
-A pragmatic recurring update loop should work like this:
+# 5. Step-by-step usage via the CLI
 
-1. **Detect or configure the target release**
-   - simplest robust path: configure a release label manually per DepMap release
-   - future improvement: fetch the DepMap release page and parse a release identifier into that same abstraction
-2. **Map datasets to filenames**
-   - keep this in a single dataset registry (`DEPMAP_FILES`)
-3. **Build a refresh plan**
-   - compare the target release label + filename mapping against the last applied snapshot
-   - reuse valid cached files when nothing changed
-4. **Download missing assets**
-   - register cached files with metadata and checksums
-5. **Load in a repeatable order**
-   - metadata first (`Model`, `Gene`, `ModelCondition`), then matrix datasets
-6. **Record applied state**
-   - write the applied release snapshot so the next run can be incremental
+The CLI is the fastest way to ask focused biological questions without opening Python.
 
-### What should stay configurable
-
-- release label
-- cache directory
-- release tracking file
-- requested datasets
-- whether refresh also loads data into DuckDB
-- whether an apply should force-reload tables
-
-## Mutation query surfaces
-
-The first mutation-aware query layer is now available:
+## Step 1 — Check the database is ready
 
 ```bash
-# Inspect event-level mutations for a model / cell line
-# accepts model_id, cell line name, stripped name, or unique partial match
-# filters can be combined
-# driver currently means the Hess driver flag
-# output supports table/csv/json
-
-depmap-db model mutations DLD-1 --gene KRAS --hotspot-only --format json
-
-# Rank the most frequently mutated genes in a lineage
-# includes total models, mutation frequency, and hotspot/LoF/driver model counts
-
-depmap-db lineage mutation-frequency Lung --limit 10
-
-# Compare dependency between mutant and WT cohorts
-# useful for first-pass stratified hypothesis checks
-
-depmap-db gene dependency-by-mutation KRAS --mutation-gene TP53 --mutation-class driver --lineage Lung
+depmap-db status
 ```
 
-Notes:
-
-- `model mutations` returns event-level rows from the canonical `mutations` table.
-- `lineage mutation-frequency` is based on the derived `model_gene_mutation_status` table.
-- `gene dependency-by-mutation` joins `model_gene_mutation_status` to `gene_effects_wide` and reports mutant/WT counts plus mean/median dependency and `delta_mean`.
-
-## Polars API and export surface
-
-Polars support now has two layers:
-
-1. **raw table snapshots** for direct access to canonical DuckDB tables
-2. **curated datasets** for notebook-friendly long/enriched analysis surfaces
-
-The core idea is still the same:
-
-- DuckDB is the local source of truth
-- selected tables or curated dataset queries are exported to Parquet snapshots
-- Polars reopens those snapshots lazily via `pl.scan_parquet(...)`
-
-A CLI cannot return a live `polars.LazyFrame`, but it *can* materialize the Parquet snapshots you want.
-
-### CLI: export Polars snapshots
+If the database has not been initialized yet, run:
 
 ```bash
-# raw tables
+depmap-db init
+```
 
-depmap-db polars export \
-  --table models \
-  --table mutations
+If tables are missing, download/load data first.
 
-# curated long-format datasets for the main downstream modalities
+## Step 2 — Ask a simple gene question
 
+### Which lineages are most dependent on a gene?
+
+```bash
+depmap-db gene dependency-summary HAPSTR1 --group-by lineage --limit 10
+```
+
+### Which diseases are most dependent on a gene?
+
+```bash
+depmap-db gene dependency-summary HAPSTR1 --group-by disease --limit 10
+```
+
+### Which lineages express a gene most strongly?
+
+```bash
+depmap-db gene expression-summary HAPSTR1 --group-by lineage --limit 10
+```
+
+## Step 3 — Get per-model values
+
+### Show per-model dependency values
+
+```bash
+depmap-db gene dependency-models MASTL --lineage Breast
+```
+
+### Export those values to CSV
+
+```bash
+depmap-db gene dependency-models MASTL \
+  --lineage Breast \
+  --output mastl_breast.csv
+```
+
+### Change output format
+
+```bash
+depmap-db gene dependency-models MASTL --format json
+```
+
+Supported formats are:
+
+- `table`
+- `csv`
+- `json`
+
+## Step 4 — Stratify dependency by mutation status
+
+Example: compare KRAS dependency between TP53-mutant and TP53-wild-type lung models:
+
+```bash
+depmap-db gene dependency-by-mutation KRAS \
+  --mutation-gene TP53 \
+  --mutation-class driver \
+  --lineage Lung
+```
+
+Mutation classes currently supported:
+
+- `any`
+- `likely_lof`
+- `hotspot`
+- `driver`
+
+## Step 5 — Inspect model mutations
+
+```bash
+depmap-db model mutations DLD-1 --gene KRAS
+```
+
+Useful filters:
+
+```bash
+depmap-db model mutations DLD-1 --lof-only
+depmap-db model mutations DLD-1 --hotspot-only
+depmap-db model mutations DLD-1 --driver-only
+```
+
+## Step 6 — Check mutation frequency in a lineage
+
+```bash
+depmap-db lineage mutation-frequency Lung --limit 20
+```
+
+## Step 7 — Use proteomics helpers
+
+### Check how well proteins map to genes
+
+```bash
+depmap-db protein mapping-summary
+```
+
+### Search the proteomics bridge
+
+```bash
+depmap-db protein search RBM47
+```
+
+### Summarise protein abundance by lineage
+
+```bash
+depmap-db protein expression-summary A0AV96 --group-by lineage --limit 10
+```
+
+## Step 8 — Export analysis tables
+
+### Export expression
+
+```bash
+depmap-db export -o expression.csv --data-type expression
+```
+
+### Export CRISPR dependency
+
+```bash
+depmap-db export -o crispr.csv --data-type crispr
+```
+
+### Export integrated data for selected genes
+
+```bash
+depmap-db export -o tp53_myc.csv --data-type integrated --genes TP53,MYC
+```
+
+### Export perfectly matched expression and CRISPR matrices
+
+```bash
+depmap-db export -o matched --data-type joint
+```
+
+This writes:
+
+- `matched_expression.csv`
+- `matched_crispr.csv`
+
+## Step 9 — Run raw SQL if needed
+
+```bash
+depmap-db sql --sql "SELECT COUNT(*) FROM models"
+```
+
+Or from a file:
+
+```bash
+depmap-db sql --file query.sql --format table
+```
+
+---
+
+# 6. Step-by-step usage via the Figure API
+
+The project also exposes a proper Python plotting layer under:
+
+```python
+import depmap_db.plots as plots
+```
+
+This is the easiest route if you want publication-style exploratory plots without writing everything from scratch.
+
+## Figure API pattern
+
+Most plotting helpers in `depmap_db.plots` follow a three-layer design:
+
+1. `analyse_*()` → returns a DataFrame used for plotting
+2. `plot_*()` → plots a supplied DataFrame
+3. a convenience wrapper (for example `expr_vs_dep()` or `lineage_analysis()`) → does both in one step and returns a Matplotlib figure
+
+That means you can either:
+
+- do everything in one line, or
+- split analysis and plotting when you want to inspect or modify the intermediate data
+
+For some plot families, the convenience function is what is exported at the top level; if you want the lower-level analysis helper, import it from the specific module inside `depmap_db.plots`.
+
+## Step 1 — Open Python or a notebook
+
+```bash
+uv run python
+```
+
+Or start Jupyter/Marimo in the activated environment.
+
+## Step 2 — Import the plotting API
+
+```python
+import depmap_db.plots as plots
+import matplotlib.pyplot as plt
+```
+
+If you want to point to a non-default database file, keep a path handy:
+
+```python
+DB = "data/depmap.duckdb"
+```
+
+## Step 3 — Make a lineage plot
+
+### One-step version
+
+```python
+fig = plots.lineage_analysis("MASTL", assay="dependency", db_path=DB)
+fig.savefig("mastl_by_lineage.png", dpi=300, bbox_inches="tight")
+```
+
+### Split analysis and plotting
+
+```python
+from depmap_db.plots.lineage_plots import analyse_by_lineage
+from depmap_db.plots import plot_lineage
+
+df = analyse_by_lineage("MASTL", assay="dependency", db_path=DB)
+fig, ax = plot_lineage(df, gene="MASTL", assay="dependency")
+```
+
+Use `assay="expression"` for expression instead of dependency.
+
+## Step 4 — Plot expression versus dependency for one gene
+
+```python
+fig = plots.expr_vs_dep("HAPSTR1", db_path=DB)
+fig.savefig("hapstr1_expr_vs_dep.png", dpi=300, bbox_inches="tight")
+```
+
+Optional coloring by lineage:
+
+```python
+fig = plots.expr_vs_dep(
+    "HAPSTR1",
+    color_by="lineage",
+    db_path=DB,
+)
+```
+
+Optional coloring by mutation status:
+
+```python
+fig = plots.expr_vs_dep(
+    "KRAS",
+    color_by="mutation",
+    mutation_gene="TP53",
+    gene_type="suppressor",
+    db_path=DB,
+)
+```
+
+## Step 5 — Build a biomarker volcano plot
+
+```python
+fig = plots.biomarker_volcano("KRAS", db_path=DB)
+fig.savefig("kras_biomarker_volcano.png", dpi=300, bbox_inches="tight")
+```
+
+If you want the underlying table first:
+
+```python
+df = plots.analyse_biomarker_volcano("KRAS", db_path=DB)
+fig, ax = plots.plot_biomarker_volcano(df, target_gene="KRAS")
+```
+
+## Step 6 — Use other prebuilt plot families
+
+The package exports additional plot helpers for:
+
+- lineage plots
+- mutation comparison
+- gene–gene scatter plots
+- top-correlation plots
+- expression-vs-dependency plots
+- biomarker volcano plots
+- drug-by-lineage plots
+- drug-by-mutation plots
+- drug–dependency scatter plots
+- mutation waterfall plots
+- co-mutation plots
+- selectivity plots
+- gene heatmaps
+
+Explore what is available with:
+
+```python
+import depmap_db.plots as plots
+print(dir(plots))
+```
+
+---
+
+# 7. Step-by-step usage via the Polars/Python API
+
+If the Figure API does not quite match the figure you want, use the lower-level Python API and make the figure yourself.
+
+## Two ways to get data into Polars
+
+`depmap_db.polars` exposes two different styles:
+
+### A. Direct scan API
+
+This queries DuckDB directly and returns a Polars `LazyFrame`.
+
+Use this for:
+
+- interactive work
+- notebooks
+- always-current data
+
+### B. Lazy Parquet snapshot API
+
+This exports Parquet snapshots first, then reopens them lazily.
+
+Use this for:
+
+- sharing data with others
+- working offline
+- caching analysis-ready datasets
+
+## Step 1 — Import the scan API
+
+```python
+from depmap_db import scan_models, scan_gene_effects_wide
+```
+
+## Step 2 — Query a table directly
+
+```python
+models = scan_models(db_path=DB)
+crispr = scan_gene_effects_wide(db_path=DB)
+
+print(models.select(["model_id", "cell_line_name", "oncotree_lineage"]).limit(5).collect())
+```
+
+## Step 3 — Use curated datasets for analysis-ready tables
+
+```python
+from depmap_db import scan_proteomics_long, scan_mutation_events
+
+proteomics = scan_proteomics_long(db_path=DB)
+mutations = scan_mutation_events(db_path=DB)
+```
+
+Example join:
+
+```python
+import polars as pl
+
+rbm47_tp53 = (
+    proteomics
+    .filter(pl.col("gene_symbol") == "RBM47")
+    .join(
+        mutations
+        .filter(pl.col("gene_symbol") == "TP53")
+        .select(["model_id", "protein_change", "hotspot"]),
+        on="model_id",
+        how="left",
+    )
+)
+
+print(rbm47_tp53.limit(10).collect())
+```
+
+## Step 4 — Export lazy Parquet snapshots
+
+From the CLI:
+
+```bash
+depmap-db polars export --table models --table mutations
+```
+
+Or curated datasets:
+
+```bash
 depmap-db polars export \
   --dataset proteomics_long \
   --dataset mutation_events \
@@ -242,7 +698,31 @@ depmap-db polars export \
   --dataset drug_secondary_enriched
 ```
 
-### Raw tables exposed to Polars
+## Step 5 — Reopen snapshots lazily in Python
+
+```python
+from depmap_db import get_lazy_datasets, get_lazy_tables
+
+frames = get_lazy_datasets(datasets=["proteomics_long", "drug_primary_long"])
+tables = get_lazy_tables(tables=["models", "mutations"])
+```
+
+## Step 6 — Prepare snapshots and open them in one step
+
+```python
+from depmap_db import prepare_lazy_datasets
+
+frames = prepare_lazy_datasets(
+    datasets=["proteomics_long", "mutation_events"],
+    db_path=DB,
+)
+```
+
+---
+
+# 8. Supported Polars surfaces
+
+## Raw tables
 
 - `models`
 - `genes`
@@ -259,102 +739,106 @@ depmap-db polars export \
 - `mutations`
 - `model_gene_mutation_status`
 
-### Curated Polars datasets
+## Curated datasets
 
-These are the recommended notebook-facing entry points when you want the main Helfrid-relevant modalities in a comparable way.
+- `mutation_events`
+- `proteomics_long`
+- `drug_primary_long`
+- `drug_secondary_enriched`
 
-- `mutation_events` → mutation event table enriched with model metadata
-- `proteomics_long` → Gygi MS matrix reshaped to one row per model × protein with protein bridge metadata
-- `drug_primary_long` → PRISM primary matrix reshaped to one row per compound × model with compound/target metadata
-- `drug_secondary_enriched` → PRISM secondary dose-response summaries enriched with model/compound/screen metadata
+---
 
-### Recommended Python usage
+# 9. Common student workflows
 
-For Helfrid-style downstream analysis, the intended starting point is:
+## Workflow 1 — “I want to know whether a gene looks selective”
 
-- `proteomics_long` for model × protein abundance
-- `mutation_events` for event-level mutation context
-- `drug_primary_long` for broad primary PRISM sensitivity screens
-- `drug_secondary_enriched` for fitted secondary PRISM response summaries
+1. Check lineage-level dependency:
+   ```bash
+   depmap-db gene dependency-summary MASTL --group-by lineage --limit 10
+   ```
+2. Export model-level values:
+   ```bash
+   depmap-db gene dependency-models MASTL --output mastl_models.csv
+   ```
+3. Make a lineage plot in Python:
+   ```python
+   fig = plots.lineage_analysis("MASTL", assay="dependency", db_path=DB)
+   ```
 
-Use `prepare_lazy_datasets(...)` when you want analysis-ready long datasets:
+## Workflow 2 — “I want to compare dependency with mutation state”
 
-```python
-import polars as pl
-from depmap_db.polars import prepare_lazy_datasets
+1. Check mutation frequency in a lineage:
+   ```bash
+   depmap-db lineage mutation-frequency Lung --limit 20
+   ```
+2. Compare dependency by mutation status:
+   ```bash
+   depmap-db gene dependency-by-mutation KRAS --mutation-gene TP53 --lineage Lung
+   ```
+3. Inspect mutation events in representative lines:
+   ```bash
+   depmap-db model mutations DLD-1 --gene TP53
+   ```
 
-frames = prepare_lazy_datasets(
-    datasets=[
-        "proteomics_long",
-        "mutation_events",
-        "drug_primary_long",
-        "drug_secondary_enriched",
-    ]
-)
+## Workflow 3 — “I want to generate a figure for a notebook or manuscript draft”
 
-proteomics = frames["proteomics_long"]
-mutations = frames["mutation_events"]
-drug_primary = frames["drug_primary_long"]
-drug_secondary = frames["drug_secondary_enriched"]
+1. Start with the Figure API:
+   ```python
+   fig = plots.expr_vs_dep("HAPSTR1", db_path=DB)
+   ```
+2. If that is too rigid, switch to the Polars scan API:
+   ```python
+   from depmap_db import scan_gene_effects_wide, scan_gene_expression_wide
+   ```
+3. Build the custom figure in Matplotlib/Seaborn.
 
-rbm47_tp53 = (
-    proteomics
-    .filter(pl.col("gene_symbol") == "RBM47")
-    .join(
-        mutations
-        .filter(pl.col("gene_symbol") == "TP53")
-        .select(["model_id", "gene_symbol", "protein_change", "hotspot"]),
-        on="model_id",
-        how="left",
-    )
-)
+---
 
-print(rbm47_tp53.limit(10).collect())
-```
+# 10. Validation and development checks
 
-Use `prepare_lazy_tables(...)` when you want the canonical stored tables directly:
-
-```python
-from depmap_db.polars import prepare_lazy_tables
-
-tables = prepare_lazy_tables(
-    tables=["models", "mutations", "model_gene_mutation_status"],
-)
-```
-
-### Reuse existing snapshots
-
-If the Parquet snapshots already exist and you just want to reopen them:
-
-```python
-from depmap_db.polars import get_lazy_datasets, get_lazy_tables
-
-frames = get_lazy_datasets(datasets=["proteomics_long", "drug_primary_long"])
-tables = get_lazy_tables(tables=["models", "mutations"])
-```
-
-### Single-object helpers
-
-For quick exploratory work, the module also exposes convenience helpers for both tables and curated datasets:
-
-```python
-from depmap_db.polars import lazy_models, lazy_mutations, lazy_proteomics_long
-
-models = lazy_models()
-mutations = lazy_mutations()
-proteomics = lazy_proteomics_long()
-```
-
-### Snapshot location
-
-By default, snapshots are written to `data/polars/`. Override that with `output_dir=...` if you want notebook-specific or temporary outputs. You can also pass `db_path=...` to target a specific DuckDB file.
-
-## Validation
-
-Run the standard checks:
+Run the standard checks before committing changes:
 
 ```bash
 uv run pytest
 uv run ruff check .
 uv run mypy src
+```
+
+---
+
+# 11. Notes and caveats
+
+- `depmap-db init` creates the schema but does **not** download data.
+- `depmap-db download` downloads files but only loads them into DuckDB if you also pass `--load-data`.
+- `refresh` is the right tool for repeatable release-aware updates.
+- The Polars API requires a **file-backed** DuckDB database for snapshot export; in-memory databases are not suitable for lazy Parquet export.
+- Some figure helpers scan large tables and may be slow on the first run.
+
+---
+
+# 12. Minimal first-day checklist for a student
+
+If you only remember one sequence, remember this:
+
+```bash
+cp .env.template .env
+uv venv
+source .venv/bin/activate
+uv sync
+depmap-db init
+depmap-db download --load-data
+depmap-db status
+```
+
+Then try:
+
+```bash
+depmap-db gene dependency-summary HAPSTR1 --group-by lineage --limit 10
+```
+
+And in Python:
+
+```python
+import depmap_db.plots as plots
+fig = plots.lineage_analysis("HAPSTR1", assay="dependency", db_path="data/depmap.duckdb")
 ```
