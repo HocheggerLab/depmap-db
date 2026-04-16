@@ -842,3 +842,61 @@ And in Python:
 import depmap_db.plots as plots
 fig = plots.lineage_analysis("HAPSTR1", assay="dependency", db_path="data/depmap.duckdb")
 ```
+
+---
+
+# 13. Worked PKMYT1 example with generated figures
+
+For a concrete example, the repository now includes a small notebook-style script:
+
+- `notebooks/pkmyt1_example.py`
+
+Run it with:
+
+```bash
+uv run python notebooks/pkmyt1_example.py
+```
+
+By default it uses the local DuckDB file at:
+
+```text
+~/.depmap/depmap.duckdb
+```
+
+and writes figure assets to:
+
+```text
+reports/readme_assets/
+```
+
+It currently generates two example PKMYT1 plots:
+
+1. **Lineage-level dependency**
+2. **Expression versus dependency scatter**
+
+### PKMYT1 lineage-level dependency
+
+This is useful as a first-pass view of which lineages look especially sensitive to PKMYT1 loss.
+
+![PKMYT1 lineage dependency](reports/readme_assets/pkmyt1_lineage_dependency.png)
+
+### PKMYT1 expression versus dependency
+
+This gives a quick biomarker-style view of whether higher PKMYT1 expression tracks with stronger dependency.
+
+![PKMYT1 expression vs dependency](reports/readme_assets/pkmyt1_expr_vs_dep.png)
+
+### Source code used for the example
+
+```python
+import depmap_db.plots as plots
+from pathlib import Path
+
+DB_PATH = Path.home() / ".depmap" / "depmap.duckdb"
+
+fig = plots.lineage_analysis("PKMYT1", assay="dependency", db_path=DB_PATH)
+fig.savefig("reports/readme_assets/pkmyt1_lineage_dependency.png", dpi=300, bbox_inches="tight")
+
+fig = plots.expr_vs_dep("PKMYT1", db_path=DB_PATH)
+fig.savefig("reports/readme_assets/pkmyt1_expr_vs_dep.png", dpi=300, bbox_inches="tight")
+```
