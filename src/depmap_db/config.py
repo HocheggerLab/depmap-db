@@ -22,23 +22,23 @@ def set_env_vars() -> None:
     Raises:
         OSError: If no configuration exists in files or environment.
     """
-    # Determine the project root (adjust as necessary)
-    project_root = Path(__file__).parent.parent.parent.resolve()
+    # Search candidates: __file__-relative root first, then cwd (handles
+    # installed packages where __file__ points into site-packages)
+    package_root = Path(__file__).parent.parent.parent.resolve()
+    candidates = dict.fromkeys([package_root, Path.cwd()])
 
-    # Get environment, defaulting to development
     env = os.getenv("ENV", "development").lower()
 
-    # Try environment-specific file first
-    env_specific_path = project_root / f".env.{env}"
-    if env_specific_path.exists():
-        load_dotenv(env_specific_path)
-        return
+    for root in candidates:
+        env_specific_path = root / f".env.{env}"
+        if env_specific_path.exists():
+            load_dotenv(env_specific_path)
+            return
 
-    # Fall back to default .env file
-    default_env_path = project_root / ".env"
-    if default_env_path.exists():
-        load_dotenv(default_env_path, override=True)
-        return
+        default_env_path = root / ".env"
+        if default_env_path.exists():
+            load_dotenv(default_env_path, override=True)
+            return
 
     # If no files found, check for required environment variables
     required_vars = [
@@ -59,11 +59,14 @@ def set_env_vars() -> None:
             "No configuration found!",
             f"Current environment: {env}",
             "Tried looking for:",
-            f"  - {env_specific_path}",
-            f"  - {default_env_path}",
+            *[
+                f"  - {p}"
+                for r in candidates
+                for p in (r / f".env.{env}", r / ".env")
+            ],
             "And checked environment variables for:",
             f"  - {', '.join(required_vars)}",
-            "\nPlease create either a .env.{ENV} file, .env file, or set all required environment variables.",
+            "\nPlease create a .env file in the project root or set all required environment variables.",
         ]
     )
     raise OSError(error_msg)
