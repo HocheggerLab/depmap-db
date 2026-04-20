@@ -4,7 +4,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from dotenv import dotenv_values, find_dotenv, load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,49 +23,25 @@ def set_env_vars() -> None:
         OSError: If no configuration exists in files or environment.
     """
     env = os.getenv("ENV", "development").lower()
-    package_root = Path(__file__).parent.parent.parent.resolve()
-
-    print(f"[DEBUG set_env_vars] cwd={Path.cwd()}")
-    print(f"[DEBUG set_env_vars] package_root={package_root}")
-    print(f"[DEBUG set_env_vars] __file__={Path(__file__).resolve()}")
 
     # Try env-specific file first via directory-tree search
     env_file = find_dotenv(f".env.{env}", usecwd=True)
-    print(f"[DEBUG set_env_vars] find_dotenv(.env.{env})={env_file!r}")
     if env_file:
-        result = load_dotenv(env_file, override=True)
-        print(
-            f"[DEBUG set_env_vars] load_dotenv result={result}, LOG_LEVEL={os.getenv('LOG_LEVEL')!r}"
-        )
+        load_dotenv(env_file, override=True)
         return
 
     # Fall back to .env via directory-tree search
     default_file = find_dotenv(".env", usecwd=True)
-    print(f"[DEBUG set_env_vars] find_dotenv(.env)={default_file!r}")
     if default_file:
-        result = load_dotenv(default_file, override=True)
-        parsed = dotenv_values(default_file)
-        print(
-            f"[DEBUG set_env_vars] load_dotenv result={result}, LOG_LEVEL={os.getenv('LOG_LEVEL')!r}"
-        )
-        print(f"[DEBUG set_env_vars] parsed keys={list(parsed.keys())}")
-        print(
-            f"[DEBUG set_env_vars] first key repr={repr(list(parsed.keys())[0]) if parsed else 'empty'}"
-        )
+        load_dotenv(default_file, override=True)
         return
 
     # Explicit path candidates as last resort
-    candidates = dict.fromkeys([package_root, Path.cwd()])
-    for root in candidates:
+    package_root = Path(__file__).parent.parent.parent.resolve()
+    for root in dict.fromkeys([package_root, Path.cwd()]):
         default_env_path = root / ".env"
-        print(
-            f"[DEBUG set_env_vars] checking explicit path={default_env_path}, exists={default_env_path.exists()}"
-        )
         if default_env_path.exists():
-            result = load_dotenv(default_env_path, override=True)
-            print(
-                f"[DEBUG set_env_vars] load_dotenv result={result}, LOG_LEVEL={os.getenv('LOG_LEVEL')!r}"
-            )
+            load_dotenv(default_env_path, override=True)
             return
 
     # If no files found, check for required environment variables
