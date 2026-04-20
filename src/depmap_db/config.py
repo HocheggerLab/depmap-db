@@ -4,7 +4,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -44,8 +44,13 @@ def set_env_vars() -> None:
     print(f"[DEBUG set_env_vars] find_dotenv(.env)={default_file!r}")
     if default_file:
         result = load_dotenv(default_file, override=True)
+        parsed = dotenv_values(default_file)
         print(
             f"[DEBUG set_env_vars] load_dotenv result={result}, LOG_LEVEL={os.getenv('LOG_LEVEL')!r}"
+        )
+        print(f"[DEBUG set_env_vars] parsed keys={list(parsed.keys())}")
+        print(
+            f"[DEBUG set_env_vars] first key repr={repr(list(parsed.keys())[0]) if parsed else 'empty'}"
         )
         return
 
