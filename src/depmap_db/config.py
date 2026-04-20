@@ -137,6 +137,7 @@ def get_logger(name: str) -> logging.Logger:
     # If the root logger isn't configured yet, configure it
     root_logger = logging.getLogger()
     if not root_logger.handlers:
+        set_env_vars()
         validate_env_vars()
 
         # Retrieve logging configurations from environment variables
