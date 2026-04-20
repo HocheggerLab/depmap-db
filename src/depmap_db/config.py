@@ -4,7 +4,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,19 +22,24 @@ def set_env_vars() -> None:
     Raises:
         OSError: If no configuration exists in files or environment.
     """
-    # Search candidates: __file__-relative root first, then cwd (handles
-    # installed packages where __file__ points into site-packages)
-    package_root = Path(__file__).parent.parent.parent.resolve()
-    candidates = dict.fromkeys([package_root, Path.cwd()])
-
     env = os.getenv("ENV", "development").lower()
 
-    for root in candidates:
-        env_specific_path = root / f".env.{env}"
-        if env_specific_path.exists():
-            load_dotenv(env_specific_path)
-            return
+    # Try env-specific file first via directory-tree search
+    env_file = find_dotenv(f".env.{env}", usecwd=True)
+    if env_file:
+        load_dotenv(env_file, override=True)
+        return
 
+    # Fall back to .env via directory-tree search
+    default_file = find_dotenv(".env", usecwd=True)
+    if default_file:
+        load_dotenv(default_file, override=True)
+        return
+
+    # Explicit path candidates as last resort
+    package_root = Path(__file__).parent.parent.parent.resolve()
+    candidates = dict.fromkeys([package_root, Path.cwd()])
+    for root in candidates:
         default_env_path = root / ".env"
         if default_env_path.exists():
             load_dotenv(default_env_path, override=True)
@@ -58,12 +63,8 @@ def set_env_vars() -> None:
         [
             "No configuration found!",
             f"Current environment: {env}",
-            "Tried looking for:",
-            *[
-                f"  - {p}"
-                for r in candidates
-                for p in (r / f".env.{env}", r / ".env")
-            ],
+            f"Working directory: {Path.cwd()}",
+            "Searched for .env and .env.{ENV} up the directory tree and in working directory.",
             "And checked environment variables for:",
             f"  - {', '.join(required_vars)}",
             "\nPlease create a .env file in the project root or set all required environment variables.",
